@@ -8,6 +8,7 @@ Guarantees each frame is uploaded only once, and creates a fresh isolated folder
 
 import os
 import sys
+import re
 import glob
 import time
 import argparse

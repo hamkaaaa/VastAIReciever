@@ -743,6 +743,72 @@
 
     <!-- RIGHT: COST EFFICIENCY & INSTANCE CONTROLS -->
     <div class="sidebar">
+      <!-- RENDER DISPATCHER CARD -->
+      <div class="side-card" style="border-color: rgba(99, 102, 241, 0.4); box-shadow: 0 4px 20px rgba(99, 102, 241, 0.15);">
+        <div class="card-title" style="color: #a5b4fc;">
+          <span>🎬</span> Render Job Dispatcher
+        </div>
+
+        <div style="display: flex; gap: 8px; background: rgba(0,0,0,0.3); padding: 4px; border-radius: 8px;">
+          <button id="tabRange" class="btn" style="flex: 1; padding: 6px; font-size: 11px; background: var(--accent-primary); color: white;" onclick="setMode('range')">Frame Range</button>
+          <button id="tabSingle" class="btn" style="flex: 1; padding: 6px; font-size: 11px; background: transparent; color: var(--text-muted);" onclick="setMode('single')">Single Frame</button>
+        </div>
+
+        <!-- Range Inputs -->
+        <div id="rangeInputs" style="display: flex; gap: 10px;">
+          <div class="form-group" style="flex: 1;">
+            <label>Start Frame:</label>
+            <input type="number" id="inpStartFrame" class="form-input" placeholder="e.g. 1" oninput="updateJobConfig()">
+          </div>
+          <div class="form-group" style="flex: 1;">
+            <label>End Frame:</label>
+            <input type="number" id="inpEndFrame" class="form-input" placeholder="e.g. 120" oninput="updateJobConfig()">
+          </div>
+        </div>
+
+        <!-- Single Frame Input -->
+        <div id="singleInput" style="display: none;" class="form-group">
+          <label>Frame Number:</label>
+          <input type="number" id="inpSingleFrame" class="form-input" placeholder="e.g. 10" oninput="updateJobConfig()">
+        </div>
+
+        <!-- Samples -->
+        <div class="form-group">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label>Cycles Samples:</label>
+            <div style="display: flex; gap: 4px;">
+              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples(64)">64</button>
+              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples(128)">128</button>
+              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples(256)">256</button>
+            </div>
+          </div>
+          <input type="number" id="inpSamples" class="form-input" value="128" oninput="updateJobConfig()">
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">OptiX AI Denoising</div>
+            <div class="setting-desc">Clean render with RTX tensor cores</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="chkDenoise" checked onchange="updateJobConfig()">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <button id="btnTriggerRender" class="btn" style="width: 100%; justify-content: center; background: var(--accent-gradient); color: white; padding: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 16px var(--accent-glow);" onclick="dispatchRender()">
+          🚀 Trigger Render on Vast.ai
+        </button>
+
+        <div style="border-top: 1px solid var(--border-color); padding-top: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 11px; color: var(--text-dim); font-weight: 600;">VAST.AI COMMAND:</span>
+            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10px;" onclick="copyVastCommand()">📋 Copy</button>
+          </div>
+          <textarea id="txtCommand" readonly style="width: 100%; height: 58px; background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); border-radius: 6px; color: #a5b4fc; font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 6px; resize: none; outline: none;"></textarea>
+        </div>
+      </div>
+
       <!-- COST SAVINGS CARD -->
       <div class="side-card">
         <div class="card-title">
@@ -810,6 +876,98 @@
     let fps = 24;
     let currentJob = "";
     let autoStopOnFinish = true;
+
+    let renderMode = 'range';
+    let currentTunnelUrl = '';
+
+    function setMode(mode) {
+      renderMode = mode;
+      document.getElementById('rangeInputs').style.display = mode === 'range' ? 'flex' : 'none';
+      document.getElementById('singleInput').style.display = mode === 'single' ? 'flex' : 'none';
+      document.getElementById('tabRange').style.background = mode === 'range' ? 'var(--accent-primary)' : 'transparent';
+      document.getElementById('tabRange').style.color = mode === 'range' ? 'white' : 'var(--text-muted)';
+      document.getElementById('tabSingle').style.background = mode === 'single' ? 'var(--accent-primary)' : 'transparent';
+      document.getElementById('tabSingle').style.color = mode === 'single' ? 'white' : 'var(--text-muted)';
+      updateJobConfig();
+    }
+
+    function setSamples(n) {
+      document.getElementById('inpSamples').value = n;
+      updateJobConfig();
+    }
+
+    async function loadJobConfig() {
+      try {
+        const res = await fetch('/api/job_config');
+        const data = await res.json();
+        if (data.tunnel_url) currentTunnelUrl = data.tunnel_url;
+        if (data.start_frame) document.getElementById('inpStartFrame').value = data.start_frame;
+        if (data.end_frame) document.getElementById('inpEndFrame').value = data.end_frame;
+        if (data.single_frame) document.getElementById('inpSingleFrame').value = data.single_frame;
+        if (data.samples) document.getElementById('inpSamples').value = data.samples;
+        if (data.denoise !== undefined) document.getElementById('chkDenoise').checked = data.denoise;
+        updateCommandBox();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function updateJobConfig() {
+      const payload = {
+        start_frame: document.getElementById('inpStartFrame').value.trim(),
+        end_frame: document.getElementById('inpEndFrame').value.trim(),
+        single_frame: renderMode === 'single' ? document.getElementById('inpSingleFrame').value.trim() : '',
+        samples: document.getElementById('inpSamples').value.trim(),
+        denoise: document.getElementById('chkDenoise').checked
+      };
+      await fetch('/api/job_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      updateCommandBox();
+    }
+
+    function updateCommandBox() {
+      let args = `--server ${currentTunnelUrl || 'https://<your-tunnel>.trycloudflare.com'}`;
+      const s = document.getElementById('inpStartFrame').value.trim();
+      const e = document.getElementById('inpEndFrame').value.trim();
+      const sf = document.getElementById('inpSingleFrame').value.trim();
+
+      if (renderMode === 'single' && sf) {
+        args += ` --single ${sf}`;
+      } else if (s && e) {
+        args += ` --start ${s} --end ${e}`;
+      }
+
+      document.getElementById('txtCommand').value = `curl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- --daemon ${args}`;
+    }
+
+    function copyVastCommand() {
+      const txt = document.getElementById('txtCommand');
+      txt.select();
+      navigator.clipboard.writeText(txt.value);
+      alert('Command copied! Paste into Vast.ai terminal once.');
+    }
+
+    async function dispatchRender() {
+      const btn = document.getElementById('btnTriggerRender');
+      btn.innerText = '⏳ Dispatching Render...';
+      btn.disabled = true;
+
+      await updateJobConfig();
+
+      try {
+        const res = await fetch('/api/trigger_daemon_job', { method: 'POST' });
+        const data = await res.json();
+        alert('🚀 Render job sent! Vast.ai worker will execute immediately.\\n(If worker is not yet running in Jupyter, run the command shown below).');
+      } catch (e) {
+        alert('Error: ' + e);
+      } finally {
+        btn.innerText = '🚀 Trigger Render on Vast.ai';
+        btn.disabled = false;
+      }
+    }
 
     // Load initial config
     async function loadConfig() {
@@ -1128,6 +1286,7 @@
 
     // Init
     loadConfig();
+    loadJobConfig();
     fetchJobs();
     fetchInstanceStatus();
 

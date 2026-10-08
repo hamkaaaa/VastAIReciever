@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 PC Receiver & Web Hub for Vast.ai Blender Renders
-Includes Live Frame-by-Frame Video Player & Automated Cost Optimization (Auto-Stop Instance).
+Includes Live Frame-by-Frame Video Player, Automated Cost Optimization, and One-Click Render Triggering.
 """
 
 import os
@@ -28,6 +28,16 @@ DASHBOARD_FILE = BASE_DIR / "dashboard.html"
 opened_jobs = set()
 job_frame_counts = {}
 last_activity_time = time.time()
+
+current_job_config = {
+    "start_frame": "",
+    "end_frame": "",
+    "single_frame": "",
+    "samples": 128,
+    "denoise": True
+}
+pending_daemon_job = None
+current_tunnel_url = ""
 
 def load_config():
     if CONFIG_FILE.exists():
@@ -93,7 +103,7 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        global last_activity_time
+        global last_activity_time, pending_daemon_job, current_tunnel_url
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
@@ -116,7 +126,6 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
             return
 
         elif path == "/api/jobs":
-            # List job directories in renders/
             jobs = []
             if OUTPUT_DIR.exists():
                 for p in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
@@ -137,8 +146,23 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
             self.send_json(frames)
             return
 
+        elif path == "/api/job_config":
+            resp = dict(current_job_config)
+            resp["tunnel_url"] = current_tunnel_url
+            self.send_json(resp)
+            return
+
+        elif path == "/api/daemon_poll":
+            if pending_daemon_job:
+                job_data = dict(pending_daemon_job)
+                job_data["active"] = True
+                pending_daemon_job = None
+                self.send_json(job_data)
+            else:
+                self.send_json({"active": False})
+            return
+
         elif path.startswith("/renders/"):
-            # Serve render images
             rel_path = path[len("/renders/"):]
             file_path = OUTPUT_DIR / urllib.parse.unquote(rel_path)
             if file_path.is_file():
@@ -186,7 +210,7 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        global opened_jobs, job_frame_counts, last_activity_time
+        global opened_jobs, job_frame_counts, last_activity_time, current_job_config, pending_daemon_job
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         last_activity_time = time.time()
@@ -200,11 +224,29 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
             self.send_json({"status": "saved"})
             return
 
+        elif path == "/api/job_config":
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length).decode())
+            current_job_config.update(data)
+            self.send_json({"status": "updated", "config": current_job_config})
+            return
+
+        elif path == "/api/trigger_daemon_job":
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 0:
+                data = json.loads(self.rfile.read(length).decode())
+                current_job_config.update(data)
+            pending_daemon_job = dict(current_job_config)
+            print(f"\n[🚀 Trigger Render] Job queued for Vast.ai worker: {pending_daemon_job}")
+            self.send_json({"status": "triggered", "job": pending_daemon_job})
+            return
+
         elif path == "/api/instance_action":
             length = int(self.headers.get("Content-Length", 0))
             data = json.loads(self.rfile.read(length).decode())
             action = data.get("action")  # 'start' or 'stop'
             cfg = load_config()
+            inst_id = cfg.get("instance_id")
             if action == "stop":
                 res = call_vast_api(f"instances/{inst_id}/", method="PUT", data={"state": "stopped"})
                 if "error" in res or res.get("success") is False:
@@ -244,7 +286,6 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         elif path == "/upload_frame":
             content_length = int(self.headers.get('Content-Length', 0))
             
-            # Extract and sanitize Job ID
             raw_job = self.headers.get('X-Job', 'default_job')
             job_name = re.sub(r'[\r\n\t\x00]', '', raw_job).strip().strip('"\'')
             job_name = re.sub(r'[^\w\-\.]', '_', job_name) or "render_job"
@@ -306,6 +347,7 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 def start_cloudflare_tunnel():
+    global current_tunnel_url
     cloudflared_bin = BASE_DIR / "cloudflared.exe"
     if not cloudflared_bin.exists():
         cloudflared_bin = "cloudflared"
@@ -331,6 +373,7 @@ def start_cloudflare_tunnel():
         if time.time() - start_time > 20:
             break
 
+    current_tunnel_url = tunnel_url or ""
     return proc, tunnel_url
 
 def idle_watcher_thread():
@@ -341,7 +384,6 @@ def idle_watcher_thread():
         cfg = load_config()
         if cfg.get("idle_stop", True) and cfg.get("api_key"):
             if time.time() - last_activity_time > 600: # 10 minutes
-                # Check if running first
                 inst_id = cfg.get("instance_id")
                 st = call_vast_api(f"instances/{inst_id}/")
                 if st.get("actual_status") == "running":
@@ -375,12 +417,12 @@ def main():
         sys.exit(1)
 
     print("\n" + "=" * 70)
-    print(" 🎯 COPY & RUN THIS ONE LINE IN YOUR JUPYTER TERMINAL:")
+    print(" 🎯 ONE COMMAND TO RUN IN VAST.AI JUPYTER TERMINAL (DAEMON OR ONE-SHOT):")
     print("=" * 70)
-    print(f"\ncurl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- --server {tunnel_url}\n")
+    print(f"\ncurl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- --daemon --server {tunnel_url}\n")
     print("=" * 70)
     print("[*] Dashboard open at http://localhost:8888")
-    print("[*] Listening for renders... (Press Ctrl+C to stop)\n")
+    print("[*] Configure your frame range on the dashboard and click 'Start Render'!")
 
     try:
         while True:

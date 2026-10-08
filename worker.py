@@ -3,12 +3,13 @@
 Vast.ai Worker Script
 Runs on Vast.ai Linux environment (Jupyter terminal or shell).
 Locates the .blend file, enables GPU, renders, and streams newly rendered frames to your PC receiver in real-time.
-Guarantees each frame is uploaded only once, and creates a fresh isolated folder for each render session.
+Supports dynamic frame ranges, custom samples, and OptiX AI denoising configured directly from your PC dashboard.
 """
 
 import os
 import sys
 import re
+import json
 import glob
 import time
 import argparse
@@ -119,37 +120,16 @@ def notify_pc_status(server_url, status_msg):
     except Exception:
         pass
 
-def main():
-    parser = argparse.ArgumentParser(description="Vast.ai Blender Render Worker")
-    parser.add_argument("--blend", help="Path to .blend file")
-    parser.add_argument("--server", default="http://localhost:8888", help="PC receiver URL (default: http://localhost:8888)")
-    parser.add_argument("--start", type=int, help="Start frame")
-    parser.add_argument("--end", type=int, help="End frame")
-    parser.add_argument("--single", type=int, help="Single frame number")
-    args = parser.parse_args()
+def fetch_job_config(server_url):
+    try:
+        res = subprocess.run(["curl", "-s", "-m", "5", f"{server_url}/api/job_config"], stdout=subprocess.PIPE, text=True)
+        if res.stdout.strip().startswith("{"):
+            return json.loads(res.stdout)
+    except Exception:
+        pass
+    return {}
 
-    server_url = args.server.rstrip("/")
-    print("=" * 60)
-    print(" 🚀 VAST.AI BLENDER RENDER WORKER")
-    print(f" Target PC Receiver: {server_url}")
-    print("=" * 60)
-
-    # Test receiver connection
-    print(f"[*] Testing connection to PC receiver at {server_url}...")
-    test_res = subprocess.run(["curl", "-s", "-m", "10", f"{server_url}/ping"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if "PONG" not in test_res.stdout:
-        print(f"[!] Warning: Could not reach PC receiver at {server_url}.")
-        print(f"    Check that receiver.py is running on your PC.")
-    else:
-        print("[✓] Connected to PC receiver!")
-
-    blender_bin = find_blender()
-    print(f"[✓] Using Blender: {blender_bin}")
-
-    blend_file = find_blend_file(args.blend)
-    print(f"[✓] Scene: {blend_file}")
-
-    # Generate isolated job ID and fresh directory for this specific render run
+def run_single_render_job(blend_file, frame_args, server_url, blender_bin, gpu_script):
     clean_stem = re.sub(r'[^\w\-\.]', '_', Path(blend_file).stem)
     job_id = f"{clean_stem}_{time.strftime('%Y%m%d_%H%M%S')}"
     job_start_time = time.time()
@@ -157,40 +137,6 @@ def main():
     output_dir = Path("/workspace/render_output") / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    gpu_script = Path(__file__).parent / "enable_gpu.py"
-    if not gpu_script.exists():
-        gpu_script = Path("/workspace/enable_gpu.py")
-        gpu_script.write_text("""
-import bpy
-try:
-    bpy.context.scene.render.engine = 'CYCLES'
-    bpy.context.preferences.filepaths.use_scripts_auto_execute = True
-    bpy.context.scene.render.use_persistent_data = True
-    cprefs = bpy.context.preferences.addons['cycles'].preferences
-    for dev in ('OPTIX', 'CUDA'):
-        try:
-            cprefs.compute_device_type = dev
-            cprefs.get_devices()
-            for d in cprefs.devices:
-                if d.type == dev:
-                    d.use = True
-                    bpy.context.scene.cycles.device = 'GPU'
-            break
-        except:
-            pass
-except Exception as e:
-    print(e)
-""")
-
-    frame_args = []
-    if args.single is not None:
-        frame_args = ["-f", str(args.single)]
-    elif args.start is not None and args.end is not None:
-        frame_args = ["-s", str(args.start), "-e", str(args.end), "-a"]
-    else:
-        frame_args = ["-a"]
-
-    # Start background uploader monitoring ONLY the fresh job directory
     stop_event = threading.Event()
     uploader_thread = threading.Thread(
         target=frame_uploader_daemon,
@@ -202,7 +148,7 @@ except Exception as e:
     print("\n" + "=" * 60)
     print(" 🔥 RENDERING IN PROGRESS (GPU OPTIX/CUDA)...")
     print(f" Job ID: {job_id}")
-    print(f" Fresh Output Folder: {output_dir}")
+    print(f" Output Folder: {output_dir}")
     print("=" * 60)
     notify_pc_status(server_url, f"Rendering job {job_id} started")
 
@@ -238,6 +184,94 @@ except Exception as e:
         print("\n" + "=" * 60)
         print(f" [✓] JOB {job_id} COMPLETED.")
         print("=" * 60)
+
+def main():
+    parser = argparse.ArgumentParser(description="Vast.ai Blender Render Worker")
+    parser.add_argument("--blend", help="Path to .blend file")
+    parser.add_argument("--server", default="http://localhost:8888", help="PC receiver URL (default: http://localhost:8888)")
+    parser.add_argument("--start", type=int, help="Start frame")
+    parser.add_argument("--end", type=int, help="End frame")
+    parser.add_argument("--single", type=int, help="Single frame number")
+    parser.add_argument("--daemon", action="store_true", help="Stay running as daemon and listen for render commands from PC")
+    args = parser.parse_args()
+
+    server_url = args.server.rstrip("/")
+    print("=" * 60)
+    print(" 🚀 VAST.AI BLENDER RENDER WORKER")
+    print(f" Target PC Receiver: {server_url}")
+    print("=" * 60)
+
+    # Test receiver connection
+    print(f"[*] Testing connection to PC receiver at {server_url}...")
+    test_res = subprocess.run(["curl", "-s", "-m", "10", f"{server_url}/ping"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if "PONG" not in test_res.stdout:
+        print(f"[!] Warning: Could not reach PC receiver at {server_url}.")
+        print(f"    Check that receiver.py is running on your PC.")
+    else:
+        print("[✓] Connected to PC receiver!")
+
+    blender_bin = find_blender()
+    print(f"[✓] Using Blender: {blender_bin}")
+
+    blend_file = find_blend_file(args.blend)
+    print(f"[✓] Scene: {blend_file}")
+
+    gpu_script = Path(__file__).parent / "enable_gpu.py"
+    if not gpu_script.exists():
+        gpu_script = Path("/workspace/enable_gpu.py")
+
+    # Fetch configuration sent from PC dashboard
+    dash_cfg = fetch_job_config(server_url)
+    if dash_cfg:
+        Path("/workspace/render_job_settings.json").write_text(json.dumps(dash_cfg))
+        print(f"[+] Loaded Dashboard Settings: {dash_cfg}")
+
+    # Determine frame args
+    start_val = args.start if args.start is not None else dash_cfg.get("start_frame")
+    end_val = args.end if args.end is not None else dash_cfg.get("end_frame")
+    single_val = args.single if args.single is not None else dash_cfg.get("single_frame")
+
+    frame_args = []
+    if single_val is not None and str(single_val).strip() != "":
+        frame_args = ["-f", str(single_val)]
+        print(f"[✓] Configured for Single Frame: {single_val}")
+    elif start_val is not None and end_val is not None and str(start_val).strip() != "" and str(end_val).strip() != "":
+        frame_args = ["-s", str(start_val), "-e", str(end_val), "-a"]
+        print(f"[✓] Configured for Frame Range: {start_val} to {end_val}")
+    else:
+        frame_args = ["-a"]
+        print("[✓] Configured for Full Animation (-a)")
+
+    if args.daemon:
+        print("\n" + "=" * 60)
+        print(" 🛰 DAEMON MODE ACTIVE: Listening for jobs from PC dashboard...")
+        print("=" * 60)
+        notify_pc_status(server_url, "Daemon worker active and listening")
+        # Run initial job if configured, then poll
+        run_single_render_job(blend_file, frame_args, server_url, blender_bin, gpu_script)
+        
+        while True:
+            time.sleep(3)
+            # Poll for new jobs
+            poll_res = subprocess.run(["curl", "-s", "-m", "5", f"{server_url}/api/daemon_poll"], stdout=subprocess.PIPE, text=True)
+            if poll_res.stdout.strip().startswith("{"):
+                try:
+                    job_req = json.loads(poll_res.stdout)
+                    if job_req.get("active"):
+                        print(f"\n[+] Received New Job from Dashboard: {job_req}")
+                        Path("/workspace/render_job_settings.json").write_text(json.dumps(job_req))
+                        new_f_args = []
+                        if job_req.get("single_frame"):
+                            new_f_args = ["-f", str(job_req["single_frame"])]
+                        elif job_req.get("start_frame") and job_req.get("end_frame"):
+                            new_f_args = ["-s", str(job_req["start_frame"]), "-e", str(job_req["end_frame"]), "-a"]
+                        else:
+                            new_f_args = ["-a"]
+                        run_single_render_job(blend_file, new_f_args, server_url, blender_bin, gpu_script)
+                except Exception as e:
+                    print(f"[!] Daemon poll error: {e}")
+    else:
+        run_single_render_job(blend_file, frame_args, server_url, blender_bin, gpu_script)
 
 if __name__ == "__main__":
     main()

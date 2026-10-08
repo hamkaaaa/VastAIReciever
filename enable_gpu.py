@@ -1,10 +1,22 @@
 import bpy
 import sys
+import os
+import json
+from pathlib import Path
 
 def setup_blender_optimizations():
     try:
         scene = bpy.context.scene
         scene.render.engine = 'CYCLES'
+
+        # Check for custom job settings passed from dashboard
+        settings_file = Path("/workspace/render_job_settings.json")
+        job_settings = {}
+        if settings_file.exists():
+            try:
+                job_settings = json.loads(settings_file.read_text())
+            except Exception:
+                pass
 
         # 1. Enable Auto-Run Python Scripts (drivers, rigged characters, procedural scripts)
         try:
@@ -20,7 +32,24 @@ def setup_blender_optimizations():
         except Exception as e:
             print(f"[Blender Setup] Notice: Could not set use_persistent_data: {e}")
 
-        # 3. GPU Hardware Acceleration (OptiX / CUDA)
+        # 3. Custom Samples & Denoising from Dashboard
+        if "samples" in job_settings and job_settings["samples"]:
+            try:
+                samples_val = int(job_settings["samples"])
+                scene.cycles.samples = samples_val
+                print(f"[Blender Setup] ✓ Cycles Samples set to: {samples_val}")
+            except Exception as e:
+                print(f"[Blender Setup] Could not set samples: {e}")
+
+        if job_settings.get("denoise", True):
+            try:
+                scene.cycles.use_denoising = True
+                scene.cycles.denoiser = 'OPTIX'
+                print("[Blender Setup] ✓ OptiX AI Denoising enabled.")
+            except Exception as e:
+                print(f"[Blender Setup] Could not enable OptiX denoiser: {e}")
+
+        # 4. GPU Hardware Acceleration (OptiX / CUDA)
         cprefs = bpy.context.preferences.addons['cycles'].preferences
         print("[Blender Setup] Configuring GPU acceleration...")
         

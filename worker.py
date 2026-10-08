@@ -30,19 +30,20 @@ def find_blender():
         if Path(c).is_file() and os.access(c, os.X_OK):
             return str(Path(c).resolve())
 
-    print("[*] Blender not found. Downloading portable Blender 4.2 LTS to /workspace/blender...")
+    print("[*] Blender tidak ditemukan. Mengunduh portable Blender 4.2 LTS resmi...")
     dl_cmd = """
     mkdir -p /workspace && cd /workspace && \
-    wget -q --show-progress https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz -O blender.tar.xz && \
+    (curl -L https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz -o blender.tar.xz || \
+     wget -q --show-progress https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz -O blender.tar.xz) && \
     tar -xf blender.tar.xz && \
     mv blender-4.2.* blender && \
-    rm blender.tar.xz
+    rm -f blender.tar.xz
     """
     ret = subprocess.run(dl_cmd, shell=True)
     if ret.returncode == 0 and Path("/workspace/blender/blender").exists():
         return "/workspace/blender/blender"
 
-    print("[!] Failed to obtain Blender. Please check disk space.")
+    print("[!] Gagal mengunduh Blender. Silakan periksa koneksi internet atau disk space.")
     sys.exit(1)
 
 def find_blend_file(explicit_path=None):

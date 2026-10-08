@@ -5,8 +5,8 @@ echo "=========================================================="
 echo " 🚀 VAST.AI BLENDER RENDER RUNNER"
 echo "=========================================================="
 
-# Ensure git, curl, unzip, python3, and gdown are present
-apt-get update -qq && apt-get install -y -qq git curl unzip python3 python3-pip > /dev/null 2>&1 || true
+# Ensure git, curl, unzip, xz-utils, blender runtime libraries, python3, and gdown are present
+apt-get update -qq && apt-get install -y -qq git curl unzip xz-utils libgl1 libxi6 libxrender1 libxfixes3 python3 python3-pip > /dev/null 2>&1 || true
 pip install -q gdown > /dev/null 2>&1 || python3 -m pip install -q gdown > /dev/null 2>&1 || true
 
 WORK_DIR="/workspace/VastAIReciever"

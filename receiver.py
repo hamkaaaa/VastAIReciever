@@ -164,6 +164,165 @@ def start_instance_api():
         res = call_vast_api(f"instances/{inst_id}/start/", method="POST")
     print(f"[✓] Start command sent to Vast.ai (Booting GPU container...)")
 
+def ensure_ssh_key_registered():
+    """Ensures local ed25519 SSH key exists and is uploaded to Vast.ai account"""
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    key_path = ssh_dir / "id_ed25519"
+    pub_path = ssh_dir / "id_ed25519.pub"
+
+    if not key_path.exists():
+        print("[*] Membuat SSH key lokal untuk koneksi otomatis...")
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    if pub_path.exists():
+        pub_key = pub_path.read_text().strip()
+        call_vast_api("ssh/", method="POST", data={"ssh_key": pub_key})
+
+def search_available_gpus(gpu_names=("RTX 4090", "RTX 3090", "RTX 5090", "RTX 4080"), max_results=6):
+    """Searches available, verified, immediately rentable GPUs on Vast.ai"""
+    query_payload = {
+        "rentable": {"eq": True},
+        "verified": {"eq": True},
+        "num_gpus": {"eq": 1},
+        "gpu_name": {"in": list(gpu_names)}
+    }
+    encoded_q = urllib.parse.quote(json.dumps(query_payload))
+    res = call_vast_api(f"bundles/?q={encoded_q}")
+    if isinstance(res, dict) and "offers" in res:
+        offers = res["offers"]
+        offers.sort(key=lambda o: (o.get("dph_total", 999), -o.get("reliability2", 0)))
+        return offers[:max_results]
+    return []
+
+def display_and_rent_gpu_flow():
+    """Displays immediately rentable GPUs, lets user pick or auto-selects, rents it, and updates config"""
+    print("\n" + "=" * 75)
+    print(" 🔍 MENCARI GPU TERBAIK YANG LANGSUNG BISA DISEWA DI VAST.AI...")
+    print("=" * 75)
+    offers = search_available_gpus()
+    if not offers:
+        print("[!] Tidak ada GPU yang cocok ditemukan saat ini.")
+        return None
+
+    print(f"\n{'#':<4} {'GPU':<12} {'Harga/Jam':<12} {'Internet':<12} {'Lokasi':<18} {'Reliability':<12}")
+    print("-" * 75)
+    for idx, o in enumerate(offers):
+        gpu = o.get("gpu_name", "GPU")
+        dph = o.get("dph_total", 0)
+        inet = f"{int(o.get('inet_down', 0))} Mbps"
+        loc = (o.get("geolocation") or "Unknown")[:17]
+        rel = f"{float(o.get('reliability2', 0))*100:.1f}%"
+        badge = " [🔥 Rekomendasi #1]" if idx == 0 else ""
+        print(f"[{idx+1}]  {gpu:<12} ${dph:<10.3f} {inet:<12} {loc:<18} {rel:<12}{badge}")
+    print("-" * 75)
+
+    choice = input("\nPilih nomor GPU untuk disewa [Default: 1]: ").strip() or "1"
+    try:
+        selected_idx = int(choice) - 1
+        if 0 <= selected_idx < len(offers):
+            selected_offer = offers[selected_idx]
+        else:
+            selected_offer = offers[0]
+    except ValueError:
+        selected_offer = offers[0]
+
+    offer_id = selected_offer["id"]
+    gpu_name = selected_offer.get("gpu_name", "GPU")
+    dph = selected_offer.get("dph_total", 0.409)
+
+    print(f"\n[*] Menyewa {gpu_name} (Offer #{offer_id} | ${dph:.3f}/jam)...")
+    ensure_ssh_key_registered()
+
+    create_payload = {
+        "image": "vastai/linux-desktop:cuda-12.9-ubuntu24.04-2026-06-16",
+        "disk": 32,
+        "runtype": "jupyter_direc ssh_direc ssh_proxy",
+        "template_hash_id": "07fd4c405aef10347e8cac7b04453021"
+    }
+
+    res = call_vast_api(f"asks/{offer_id}/", method="PUT", data=create_payload)
+    new_inst_id = res.get("new_contract") or res.get("id")
+
+    if not new_inst_id:
+        print(f"[!] Gagal menyewa instance: {res}")
+        return None
+
+    print(f"[✓] Berhasil menyewa Instance baru ID: {new_inst_id}!")
+    
+    cfg = load_config()
+    old_id = cfg.get("instance_id")
+    if old_id and str(old_id) != str(new_inst_id):
+        del_choice = input(f"Hapus instance lama ({old_id}) yang terkunci agar tidak kena biaya disk? [Y/n]: ").strip().lower()
+        if del_choice != "n":
+            call_vast_api(f"instances/{old_id}/", method="DELETE")
+            print(f"[✓] Instance lama {old_id} berhasil dihapus.")
+
+    cfg["instance_id"] = str(new_inst_id)
+    save_config(cfg)
+    return str(new_inst_id)
+
+def wait_for_instance_running(inst_id, timeout=180):
+    """Waits until the instance status is RUNNING and SSH is ready"""
+    print(f"[*] Menunggu instance #{inst_id} booting dan siap...")
+    start_t = time.time()
+    while time.time() - start_t < timeout:
+        res = call_vast_api(f"instances/{inst_id}/")
+        info = res.get("instances", res) if isinstance(res, dict) else {}
+        status = str(info.get("actual_status", "")).lower()
+        cur_state = str(info.get("cur_state", "")).lower()
+        status_msg = str(info.get("status_msg", "")).lower()
+        ssh_host = info.get("ssh_host")
+        ssh_port = info.get("ssh_port")
+
+        if "scheduling" in status or "scheduling" in cur_state or "in use" in status_msg:
+            print("\n" + "!" * 75)
+            print(f" ⚠️ INSTANCE #{inst_id} TERKUNCI (SCHEDULING / GPU SEDANG DIPAKAI ORANG LAIN)!")
+            print(" Vast.ai tidak bisa menyalakan mesin ini sekarang.")
+            print("!" * 75)
+            rent_in = input("\nSewa GPU baru yang langsung KOSONG & SIAP PAKAI sekarang? [Y/n]: ").strip().lower()
+            if rent_in != "n":
+                new_id = display_and_rent_gpu_flow()
+                if new_id:
+                    return wait_for_instance_running(new_id, timeout=timeout)
+            return None
+        
+        if status == "running" and ssh_host and ssh_port:
+            print(f"[✓] Instance 🟢 RUNNING di {ssh_host}:{ssh_port}!")
+            return info
+        time.sleep(4)
+    print("[!] Waktu tunggu habis. Instance mungkin masih initializing.")
+    return None
+
+def auto_execute_command_via_ssh(ssh_host, ssh_port, cmd_string, max_retries=20):
+    """Automatically connects via SSH and executes the render command on Vast.ai"""
+    print(f"[*] 🔌 Menghubungkan SSH otomatis ke root@{ssh_host}:{ssh_port}...")
+    for attempt in range(max_retries):
+        test_res = subprocess.run([
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=NUL",
+            "-o", "ConnectTimeout=4",
+            "-p", str(ssh_port),
+            f"root@{ssh_host}",
+            "echo READY"
+        ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+        if "READY" in test_res.stdout:
+            print("[✓] SSH terhubung! Menjalankan setup Blender & render secara otomatis di Vast.ai...")
+            proc = subprocess.Popen([
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=NUL",
+                "-p", str(ssh_port),
+                f"root@{ssh_host}",
+                cmd_string
+            ])
+            return proc
+        time.sleep(3)
+    print("[!] SSH belum merespon dalam waktu yang ditentukan.")
+    return None
+
 def get_usd_to_idr_rate():
     """Fetches real-time USD/IDR exchange rate with fallback"""
     try:
@@ -580,12 +739,26 @@ def main():
 
     # 2. Check and display instance status
     inst_data = get_instance_info()
-    if inst_data:
-        status = inst_data.get("actual_status", "unknown").upper()
-        gpu_name = inst_data.get("gpu_name", "GPU")
-        dph = float(inst_data.get("dph_total", 0.409))
-        if status == "RUNNING":
-            print(f"\n[Vast.ai Status] 🟢 {status} ({gpu_name} | Rate: ${dph:.3f}/hr)")
+    current_status = (inst_data.get("actual_status", "") if inst_data else "").lower()
+    status_msg = (inst_data.get("status_msg", "") if inst_data else "").lower()
+    gpu_name = inst_data.get("gpu_name", "GPU") if inst_data else "GPU"
+    dph = float(inst_data.get("dph_total", 0.409)) if inst_data else 0.409
+
+    is_stuck = ("scheduling" in current_status or "in use" in status_msg or "offline" in current_status)
+    if is_stuck:
+        print("\n" + "!" * 75)
+        print(f" ⚠️ PERINGATAN: Instance #{cfg.get('instance_id')} berstatus SCHEDULING / GPU DIGUNAKAN ORANG LAIN!")
+        print(" Vast.ai tidak bisa menyalakan mesin ini sekarang sampai GPU bebas (bisa berjam-jam/berminggu-minggu).")
+        print("!" * 75)
+        rent_in = input("\nSewa GPU baru yang langsung KOSONG & SIAP PAKAI sekarang? [Y/n]: ").strip().lower()
+        if rent_in != "n":
+            new_id = display_and_rent_gpu_flow()
+            if new_id:
+                record_vast_boot_time(time.time())
+                inst_data = wait_for_instance_running(new_id)
+    elif inst_data:
+        print(f"\n[Vast.ai Status] Instance #{cfg.get('instance_id')}: {current_status.upper()} ({gpu_name} | Rate: ${dph:.3f}/hr)")
+        if current_status == "running":
             if cfg.get("last_boot_time"):
                 vast_boot_time = float(cfg["last_boot_time"])
                 b_str = time.strftime("%H:%M:%S", time.localtime(vast_boot_time))
@@ -593,12 +766,32 @@ def main():
             else:
                 record_vast_boot_time(time.time())
         else:
-            print(f"\n[Vast.ai Status] ⚪ {status} (Storage Only: $0.009/hr - SAVING CREDITS)")
-            clear_vast_boot_time()
+            print("[1] Nyalakan instance yang sudah ada")
+            print("[2] Cari & sewa GPU baru yang ready")
+            opt = input("Pilih opsi [default: 1]: ").strip() or "1"
+            if opt == "2":
+                new_id = display_and_rent_gpu_flow()
+                if new_id:
+                    record_vast_boot_time(time.time())
+                    inst_data = wait_for_instance_running(new_id)
+            else:
+                if current_gdrive_url:
+                    print("\n[*] 🚀 Proyek sudah siap di Google Drive! Menyalakan instance Vast.ai secara instan...")
+                    start_instance_api()
+                    inst_data = wait_for_instance_running(cfg.get("instance_id"))
+                else:
+                    boot_in = input("\nInstance saat ini STOPPED. Nyalakan sekarang? [Y/n]: ").strip().lower()
+                    if boot_in != "n":
+                        start_instance_api()
+                        inst_data = wait_for_instance_running(cfg.get("instance_id"))
     else:
-        print("\n[Vast.ai Status] Connected locally")
-        if not vast_boot_time:
-            record_vast_boot_time(time.time())
+        print("\n[Vast.ai Status] Belum ada instance yang terkonfigurasi.")
+        rent_in = input("Cari & sewa GPU baru sekarang? [Y/n]: ").strip().lower()
+        if rent_in != "n":
+            new_id = display_and_rent_gpu_flow()
+            if new_id:
+                record_vast_boot_time(time.time())
+                inst_data = wait_for_instance_running(new_id)
 
     # 3. Interactive Render Configuration
     print("\n--- ⚙️  2. PENGATURAN RENDER ---")
@@ -639,21 +832,7 @@ def main():
         "denoise": denoise_val
     }
 
-    # Auto-boot Vast.ai in an instant
-    if inst_data and inst_data.get("actual_status") != "running":
-        if current_gdrive_url:
-            print("\n[*] 🚀 Proyek sudah siap di Google Drive! Menyalakan instance Vast.ai secara instan...")
-            start_instance_api()
-            print("[*] Menunggu instance siap (~15-20s)...")
-            time.sleep(15)
-        else:
-            boot_in = input("\nInstance saat ini STOPPED. Nyalakan sekarang? [Y/n]: ").strip().lower()
-            if boot_in != "n":
-                start_instance_api()
-                print("[*] Menunggu instance siap (~15-20s)...")
-                time.sleep(15)
-
-    # 3. Start local receiver & Cloudflare tunnel
+    # 4. Start local receiver & Cloudflare tunnel
     print("\n[*] Starting local receiver on port 8888...")
     server = ThreadedReceiverServer(("0.0.0.0", 8888), RenderReceiverHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -675,11 +854,27 @@ def main():
 
     vast_cmd = f"curl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- --server {tunnel_url}{extra_flags}"
 
-    print("\n" + "=" * 70)
-    print(" 🎯 RUN THIS ONE COMMAND IN YOUR VAST.AI JUPYTER TERMINAL:")
-    print("=" * 70)
-    print(f"\n{vast_cmd}\n")
-    print("=" * 70)
+    # 5. Otomatis hubungkan SSH & jalankan render di Vast.ai
+    ssh_host = inst_data.get("ssh_host") if inst_data else None
+    ssh_port = inst_data.get("ssh_port") if inst_data else None
+
+    if not ssh_host or not ssh_port or (inst_data and inst_data.get("actual_status") != "running"):
+        inst_data = wait_for_instance_running(cfg.get("instance_id"))
+        if inst_data:
+            ssh_host = inst_data.get("ssh_host")
+            ssh_port = inst_data.get("ssh_port")
+
+    ssh_proc = None
+    if ssh_host and ssh_port:
+        ssh_proc = auto_execute_command_via_ssh(ssh_host, ssh_port, vast_cmd)
+
+    if not ssh_proc:
+        print("\n" + "=" * 70)
+        print(" 🎯 JIKA SSH TIDAK OTOMATIS BERJALAN, JALANKAN PERINTAH INI DI TERMINAL JUPYTER:")
+        print("=" * 70)
+        print(f"\n{vast_cmd}\n")
+        print("=" * 70)
+
     print(f"[*] Optimizations: Persistent Data ON | Auto-Scripts ON (-y) | Samples: {samples_in}")
     print(f"[*] Auto-Stop on Completion: {'YES (Will shut down instance)' if cfg['auto_stop'] else 'NO'}")
     if not vast_boot_time:

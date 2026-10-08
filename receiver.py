@@ -205,11 +205,14 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length).decode())
             action = data.get("action")  # 'start' or 'stop'
             cfg = load_config()
-            inst_id = cfg.get("instance_id")
             if action == "stop":
                 res = call_vast_api(f"instances/{inst_id}/", method="PUT", data={"state": "stopped"})
+                if "error" in res or res.get("success") is False:
+                    res = call_vast_api(f"instances/{inst_id}/stop/", method="POST")
             else:
                 res = call_vast_api(f"instances/{inst_id}/", method="PUT", data={"state": "running"})
+                if "error" in res or res.get("success") is False:
+                    res = call_vast_api(f"instances/{inst_id}/start/", method="POST")
             self.send_json({"result": res, "message": f"Instance set to {action}"})
             return
 

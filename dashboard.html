@@ -851,22 +851,44 @@
         const btnStart = document.getElementById('btnStartInstance');
         const rateTxt = document.getElementById('hourlyRateText');
 
-        if (data.actual_status === 'running') {
+        const isRunning = data.actual_status === 'running';
+        const isStopped = data.actual_status === 'stopped' || data.actual_status === 'exited' || data.actual_status === 'inactive';
+        const isTransitioning = data.actual_status === 'loading' || data.actual_status === 'starting';
+
+        if (isRunning) {
           badge.className = 'status-indicator status-running';
-          txt.innerText = 'RUNNING';
+          txt.innerText = 'RUNNING ($0.409/hr)';
           btnStop.style.display = 'inline-flex';
           btnStart.style.display = 'none';
-        } else if (data.actual_status === 'stopped') {
+          btnStart.innerText = '▶ Start Instance';
+          btnStart.disabled = false;
+        } else if (isStopped) {
           badge.className = 'status-indicator status-stopped';
           txt.innerText = 'STOPPED (SAVING CREDITS)';
           btnStop.style.display = 'none';
           btnStart.style.display = 'inline-flex';
+          btnStart.innerText = '▶ Start Instance';
+          btnStart.disabled = false;
+        } else if (isTransitioning) {
+          badge.className = 'status-indicator status-stopped';
+          txt.innerText = 'STARTING... (WAITING FOR GPU)';
+          btnStop.style.display = 'none';
+          btnStart.style.display = 'inline-flex';
+          btnStart.innerText = '⏳ Starting...';
+          btnStart.disabled = true;
         } else {
-          txt.innerText = data.actual_status ? data.actual_status.toUpperCase() : 'READY';
+          txt.innerText = data.actual_status ? data.actual_status.toUpperCase() : 'STOPPED';
+          btnStop.style.display = 'none';
+          btnStart.style.display = 'inline-flex';
+          btnStart.innerText = '▶ Start Instance';
+          btnStart.disabled = false;
         }
 
         if (data.dph_total) {
-          rateTxt.innerText = `$${parseFloat(data.dph_total).toFixed(3)}/hr`;
+          const rateVal = parseFloat(data.dph_total);
+          rateTxt.innerText = `$${rateVal.toFixed(3)}/hr`;
+        } else if (isStopped) {
+          rateTxt.innerText = `$0.009/hr (Storage Only)`;
         }
       } catch (e) {
         // Silent polling
@@ -874,7 +896,16 @@
     }
 
     async function toggleInstance(action) {
+      const btnStart = document.getElementById('btnStartInstance');
+      const btnStop = document.getElementById('btnStopInstance');
+      
       if (action === 'stop' && !confirm('Stop Vast.ai instance now to save credits?')) return;
+      
+      if (action === 'start') {
+        btnStart.innerText = '⏳ Starting...';
+        btnStart.disabled = true;
+      }
+
       try {
         const res = await fetch('/api/instance_action', {
           method: 'POST',
@@ -882,7 +913,21 @@
           body: JSON.stringify({ action })
         });
         const result = await res.json();
-        alert(result.message || 'Action sent!');
+        
+        // Rapidly poll status for 30s while it starts
+        let attempts = 0;
+        const interval = setInterval(async () => {
+          attempts++;
+          await fetchInstanceStatus();
+          const badge = document.getElementById('instanceStatusBadge');
+          if (badge.classList.contains('status-running') || attempts > 10) {
+            clearInterval(interval);
+          }
+        }, 3000);
+      } catch (e) {
+        alert('Action error: ' + e);
+        fetchInstanceStatus();
+      }
         fetchInstanceStatus();
       } catch (e) {
         alert('Failed: ' + e);

@@ -299,7 +299,75 @@ def main():
         print(f"[+] Loaded Configuration from PC: {dash_cfg}")
 
     blend_file = None
-    if dash_cfg.get("upload_project"):
+    gdrive_url = dash_cfg.get("gdrive_url")
+    if gdrive_url:
+        print("\n" + "=" * 60)
+        print(" 📥 MENGUNDUH PROYEK DARI GOOGLE DRIVE (GIGABIT SPEED)...")
+        print(f" URL: {gdrive_url}")
+        print("=" * 60)
+        notify_pc_status(server_url, "Downloading project from Google Drive at high speed...")
+
+        try:
+            import gdown
+        except ImportError:
+            print("[*] Menginstall utilitas gdown...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "gdown"])
+            import gdown
+
+        dest_dir = Path("/workspace")
+        downloaded = None
+        try:
+            downloaded = gdown.download(gdrive_url, output=str(dest_dir) + "/", fuzzy=True, quiet=False)
+        except Exception as e:
+            print(f"[!] Warning gdown: {e}")
+
+        if not downloaded or not Path(downloaded).exists():
+            # Try fuzzy id extraction
+            m = re.search(r'/d/([a-zA-Z0-9_-]+)', gdrive_url) or re.search(r'id=([a-zA-Z0-9_-]+)', gdrive_url)
+            if m:
+                file_id = m.group(1)
+                direct_url = f"https://drive.google.com/uc?id={file_id}"
+                try:
+                    downloaded = gdown.download(direct_url, output=str(dest_dir) + "/", fuzzy=True, quiet=False)
+                except Exception as e:
+                    print(f"[!] Warning gdown retry: {e}")
+
+        if not downloaded or not Path(downloaded).exists():
+            print("[!] Error fatal: Gagal mengunduh file dari Google Drive! Pastikan link diset 'Anyone with link can view'.")
+            sys.exit(1)
+
+        dl_path = Path(downloaded)
+        size_mb = dl_path.stat().st_size / (1024 * 1024)
+        print(f"[✓] File berhasil diunduh dari Google Drive: {dl_path.name} ({size_mb:.1f} MB)!")
+
+        is_zip = dl_path.suffix.lower() == ".zip"
+        if not is_zip:
+            try:
+                import zipfile
+                is_zip = zipfile.is_zipfile(dl_path)
+            except Exception:
+                pass
+
+        if is_zip:
+            extract_dir = Path("/workspace/project")
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[📦 Project Unpack] Mengekstrak {dl_path.name} ke {extract_dir}...")
+            if subprocess.run(["which", "unzip"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+                subprocess.run("apt-get update -qq && apt-get install -y -qq unzip", shell=True)
+            subprocess.run(["unzip", "-o", str(dl_path), "-d", str(extract_dir)])
+
+            candidates = list(extract_dir.glob("*.blend")) + list(extract_dir.glob("**/*.blend"))
+            if not candidates:
+                print(f"[!] Error: Tidak ditemukan file .blend di dalam {dl_path.name}!")
+                sys.exit(1)
+            candidates.sort(key=lambda p: p.stat().st_size, reverse=True)
+            blend_file = str(candidates[0].resolve())
+            print(f"[✓] Scene .blend ditemukan di dalam zip: {blend_file}")
+        else:
+            blend_file = str(dl_path.resolve())
+            print(f"[✓] Scene .blend siap: {blend_file}")
+
+    elif dash_cfg.get("upload_project"):
         proj_name = dash_cfg.get("project_name", "project.blend")
         proj_type = dash_cfg.get("project_type", "blend")
         file_size = dash_cfg.get("file_size", 0)

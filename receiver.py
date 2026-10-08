@@ -43,6 +43,7 @@ server_running = True
 
 current_project_file = None
 current_project_type = None
+current_gdrive_url = ""
 
 def package_folder_to_zip(folder_path):
     cache_dir = BASE_DIR / ".cache"
@@ -308,12 +309,18 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         elif path == "/api/job_config":
             resp = dict(current_job_config)
             resp["tunnel_url"] = current_tunnel_url
-            if current_project_file and current_project_file.exists():
+            resp["gdrive_url"] = current_gdrive_url or ""
+            if current_gdrive_url:
+                resp["source_type"] = "gdrive"
+                resp["upload_project"] = False
+            elif current_project_file and current_project_file.exists():
+                resp["source_type"] = "pc_upload"
                 resp["upload_project"] = True
                 resp["project_name"] = current_project_file.name
                 resp["project_type"] = current_project_type or ("zip" if current_project_file.suffix.lower() == ".zip" else "blend")
                 resp["file_size"] = current_project_file.stat().st_size
             else:
+                resp["source_type"] = "vast_local"
                 resp["upload_project"] = False
             self.send_json(resp)
             return
@@ -495,7 +502,7 @@ def start_cloudflare_tunnel():
     return proc, tunnel_url
 
 def main():
-    global current_job_config, vast_boot_time, current_project_file, current_project_type
+    global current_job_config, vast_boot_time, current_project_file, current_project_type, current_gdrive_url
     print("=" * 70)
     print(" 🚀 VAST.AI BLENDER RENDER RECEIVER (CLI)")
     print("=" * 70)
@@ -503,14 +510,32 @@ def main():
     cfg = load_config()
 
     # 1. Pilih Proyek Blender
-    print("\n--- 📁 1. PILIH PROYEK BLENDER ---")
-    print("[1] Upload proyek dari PC ini (.blend / .zip / folder proyek)")
-    print("[2] Gunakan proyek yang sudah ada di Vast.ai")
+    print("\n--- 📁 1. PILIH SUMBER PROYEK BLENDER ---")
+    print("[1] Google Drive Link (HEMAT BIAYA: Upload di PC saat GPU mati, lalu paste link)")
+    print("[2] Upload langsung dari PC via Tunnel (.blend / .zip lokal)")
+    print("[3] Gunakan proyek yang sudah ada di Vast.ai")
     
     proj_choice = input("Pilih sumber proyek [default: 1]: ").strip() or "1"
     
     upload_project_needed = False
+    current_gdrive_url = ""
+    current_project_file = None
+    current_project_type = None
+
     if proj_choice == "1":
+        while True:
+            raw_url = input("\nMasukkan Link Share Google Drive (.blend atau .zip):\n(Pastikan link diset 'Anyone with the link can view')\n> ").strip().strip('"\'')
+            if not raw_url:
+                print("[!] Link Google Drive tidak boleh kosong.")
+                continue
+            if "drive.google.com" not in raw_url and "http" not in raw_url:
+                print("[!] Format URL tidak valid. Pastikan link Google Drive yang benar.")
+                continue
+            current_gdrive_url = raw_url
+            print(f"[✓] Google Drive link tersimpan: {current_gdrive_url}")
+            break
+
+    elif proj_choice == "2":
         while True:
             raw_path = input("\nMasukkan path file (.blend / .zip) atau folder proyek di PC:\n(Tips: Drag & drop file/folder langsung ke terminal ini)\n> ").strip().strip('"\'')
             if not raw_path:
@@ -603,6 +628,7 @@ def main():
 
     current_job_config = {
         "upload_project": upload_project_needed,
+        "gdrive_url": current_gdrive_url,
         "project_name": current_project_file.name if current_project_file else "",
         "project_type": current_project_type or "",
         "file_size": current_project_file.stat().st_size if current_project_file else 0,
@@ -613,13 +639,19 @@ def main():
         "denoise": denoise_val
     }
 
-    # If instance is stopped, offer to boot it up
+    # Auto-boot Vast.ai in an instant
     if inst_data and inst_data.get("actual_status") != "running":
-        boot_in = input("\nInstance is currently STOPPED. Boot it up now? [Y/n]: ").strip().lower()
-        if boot_in != "n":
+        if current_gdrive_url:
+            print("\n[*] 🚀 Proyek sudah siap di Google Drive! Menyalakan instance Vast.ai secara instan...")
             start_instance_api()
-            print("[*] Waiting for instance to become ready (~20s)...")
+            print("[*] Menunggu instance siap (~15-20s)...")
             time.sleep(15)
+        else:
+            boot_in = input("\nInstance saat ini STOPPED. Nyalakan sekarang? [Y/n]: ").strip().lower()
+            if boot_in != "n":
+                start_instance_api()
+                print("[*] Menunggu instance siap (~15-20s)...")
+                time.sleep(15)
 
     # 3. Start local receiver & Cloudflare tunnel
     print("\n[*] Starting local receiver on port 8888...")

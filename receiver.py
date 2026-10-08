@@ -196,11 +196,11 @@ def search_available_gpus(gpu_names=("RTX 4090", "RTX 3090", "RTX 5090", "RTX 40
     return []
 
 def display_and_rent_gpu_flow():
-    """Displays immediately rentable GPUs, lets user pick or auto-selects, rents it, and updates config"""
+    """Displays immediately rentable GPUs, lets user pick or auto-selects, rents it with auto-retry, and updates config"""
     print("\n" + "=" * 75)
     print(" 🔍 MENCARI GPU TERBAIK YANG LANGSUNG BISA DISEWA DI VAST.AI...")
     print("=" * 75)
-    offers = search_available_gpus()
+    offers = search_available_gpus(max_results=8)
     if not offers:
         print("[!] Tidak ada GPU yang cocok ditemukan saat ini.")
         return None
@@ -220,18 +220,11 @@ def display_and_rent_gpu_flow():
     choice = input("\nPilih nomor GPU untuk disewa [Default: 1]: ").strip() or "1"
     try:
         selected_idx = int(choice) - 1
-        if 0 <= selected_idx < len(offers):
-            selected_offer = offers[selected_idx]
-        else:
-            selected_offer = offers[0]
+        if not (0 <= selected_idx < len(offers)):
+            selected_idx = 0
     except ValueError:
-        selected_offer = offers[0]
+        selected_idx = 0
 
-    offer_id = selected_offer["id"]
-    gpu_name = selected_offer.get("gpu_name", "GPU")
-    dph = selected_offer.get("dph_total", 0.409)
-
-    print(f"\n[*] Menyewa {gpu_name} (Offer #{offer_id} | ${dph:.3f}/jam)...")
     ensure_ssh_key_registered()
 
     create_payload = {
@@ -241,15 +234,50 @@ def display_and_rent_gpu_flow():
         "template_hash_id": "07fd4c405aef10347e8cac7b04453021"
     }
 
-    res = call_vast_api(f"asks/{offer_id}/", method="PUT", data=create_payload)
-    new_inst_id = res.get("new_contract") or res.get("id")
+    # Queue candidates to try starting with selected choice
+    queue = [offers[selected_idx]] + [o for i, o in enumerate(offers) if i != selected_idx]
+    new_inst_id = None
+    chosen_offer = None
+
+    for attempt_idx, candidate in enumerate(queue):
+        cand_id = candidate["id"]
+        cand_gpu = candidate.get("gpu_name", "GPU")
+        cand_dph = candidate.get("dph_total", 0.409)
+        print(f"\n[*] [{attempt_idx + 1}/{len(queue)}] Menyewa {cand_gpu} (Offer #{cand_id} | ${cand_dph:.3f}/jam)...")
+        res = call_vast_api(f"asks/{cand_id}/", method="PUT", data=create_payload)
+        new_inst_id = res.get("new_contract") or res.get("id")
+
+        if new_inst_id:
+            chosen_offer = candidate
+            print(f"[✓] SUKSES! Berhasil menyewa {cand_gpu} (Instance ID: {new_inst_id})!")
+            break
+        else:
+            err_msg = res.get("error") or str(res)
+            print(f"[!] Offer #{cand_id} tidak tersedia / diambil pengguna lain: {err_msg}")
+            print("[*] 🔄 Otomatis mencoba opsi GPU terbaik berikutnya...")
+            time.sleep(1)
+
+    # If all in initial queue failed, refresh offers once and retry
+    if not new_inst_id:
+        print("\n[*] Menyegarkan penawaran GPU terbaru dari Vast.ai...")
+        fresh_offers = search_available_gpus(max_results=6)
+        for candidate in fresh_offers:
+            cand_id = candidate["id"]
+            cand_gpu = candidate.get("gpu_name", "GPU")
+            cand_dph = candidate.get("dph_total", 0.409)
+            print(f"[*] Mencoba menyewa {cand_gpu} (Offer #{cand_id} | ${cand_dph:.3f}/jam)...")
+            res = call_vast_api(f"asks/{cand_id}/", method="PUT", data=create_payload)
+            new_inst_id = res.get("new_contract") or res.get("id")
+            if new_inst_id:
+                chosen_offer = candidate
+                print(f"[✓] SUKSES! Berhasil menyewa {cand_gpu} (Instance ID: {new_inst_id})!")
+                break
+            time.sleep(1)
 
     if not new_inst_id:
-        print(f"[!] Gagal menyewa instance: {res}")
+        print("[!] Semua penawaran GPU saat ini gagal disewa. Silakan coba kembali beberapa saat lagi.")
         return None
 
-    print(f"[✓] Berhasil menyewa Instance baru ID: {new_inst_id}!")
-    
     cfg = load_config()
     old_id = cfg.get("instance_id")
     if old_id and str(old_id) != str(new_inst_id):
@@ -268,7 +296,22 @@ def wait_for_instance_running(inst_id, timeout=180):
     start_t = time.time()
     while time.time() - start_t < timeout:
         res = call_vast_api(f"instances/{inst_id}/")
-        info = res.get("instances", res) if isinstance(res, dict) else {}
+        info = {}
+        if isinstance(res, dict):
+            if isinstance(res.get("instances"), dict):
+                info = res["instances"]
+            elif "actual_status" in res:
+                info = res
+
+        if not info:
+            print(f"\n[!] Instance #{inst_id} tidak ditemukan atau sudah dihapus di Vast.ai.")
+            rent_in = input("Sewa GPU baru yang langsung KOSONG & SIAP PAKAI sekarang? [Y/n]: ").strip().lower()
+            if rent_in != "n":
+                new_id = display_and_rent_gpu_flow()
+                if new_id:
+                    return wait_for_instance_running(new_id, timeout=timeout)
+            return None
+
         status = str(info.get("actual_status", "")).lower()
         cur_state = str(info.get("cur_state", "")).lower()
         status_msg = str(info.get("status_msg", "")).lower()
@@ -858,8 +901,10 @@ def main():
     ssh_host = inst_data.get("ssh_host") if inst_data else None
     ssh_port = inst_data.get("ssh_port") if inst_data else None
 
+    cfg = load_config()
+    current_inst_id = cfg.get("instance_id")
     if not ssh_host or not ssh_port or (inst_data and inst_data.get("actual_status") != "running"):
-        inst_data = wait_for_instance_running(cfg.get("instance_id"))
+        inst_data = wait_for_instance_running(current_inst_id)
         if inst_data:
             ssh_host = inst_data.get("ssh_host")
             ssh_port = inst_data.get("ssh_port")

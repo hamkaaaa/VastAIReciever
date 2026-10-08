@@ -164,15 +164,16 @@ def main():
 
     remote_blender = "blender"
     if "NOT_FOUND" in out or not out.strip():
-        print("[*] Blender not found in instance. Downloading fast portable Blender 4.2 LTS on Vast.ai...")
+        print("[*] Blender not found in instance. Downloading fast portable Blender 5.2 LTS on Vast.ai...")
         install_script = """
         mkdir -p /workspace && cd /workspace && \
         if [ ! -f /workspace/blender/blender ]; then
-            echo 'Downloading Blender 4.2...' && \
-            wget -q --show-progress https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz -O blender.tar.xz && \
+            echo 'Downloading Blender 5.2 LTS...' && \
+            (wget -q --show-progress https://download.blender.org/release/Blender5.2/blender-5.2.2-linux-x64.tar.xz -O blender.tar.xz || \
+             curl -L https://download.blender.org/release/Blender5.2/blender-5.2.2-linux-x64.tar.xz -o blender.tar.xz) && \
             tar -xf blender.tar.xz && \
-            mv blender-4.2.* blender && \
-            rm blender.tar.xz
+            (mv blender-5.2.* blender 2>/dev/null || mv blender-5.* blender 2>/dev/null || true) && \
+            rm -f blender.tar.xz
         fi
         """
         run_ssh(target, port, identity, install_script)

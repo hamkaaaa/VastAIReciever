@@ -30,13 +30,14 @@ def find_blender():
         if Path(c).is_file() and os.access(c, os.X_OK):
             return str(Path(c).resolve())
 
-    print("[*] Blender tidak ditemukan. Mengunduh portable Blender 4.2 LTS resmi...")
+    print("[*] Blender tidak ditemukan. Mengunduh portable Blender 5.2 LTS resmi...")
     dl_cmd = """
     mkdir -p /workspace && cd /workspace && \
-    (curl -L https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz -o blender.tar.xz || \
-     wget -q --show-progress https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz -O blender.tar.xz) && \
+    (curl -L https://download.blender.org/release/Blender5.2/blender-5.2.2-linux-x64.tar.xz -o blender.tar.xz || \
+     wget -q --show-progress https://download.blender.org/release/Blender5.2/blender-5.2.2-linux-x64.tar.xz -O blender.tar.xz || \
+     curl -L https://download.blender.org/release/Blender5.2/blender-5.2.0-linux-x64.tar.xz -o blender.tar.xz) && \
     tar -xf blender.tar.xz && \
-    mv blender-4.2.* blender && \
+    (mv blender-5.2.* blender 2>/dev/null || mv blender-5.* blender 2>/dev/null || true) && \
     rm -f blender.tar.xz
     """
     ret = subprocess.run(dl_cmd, shell=True)

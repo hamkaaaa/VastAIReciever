@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+renders/
+.last_vast_ssh.txt
+*.tar.gz
+*.blend

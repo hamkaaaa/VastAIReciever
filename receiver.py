@@ -37,8 +37,26 @@ CONFIG_FILE = BASE_DIR / ".vast_config.json"
 total_frames_received = 0
 active_job_name = ""
 last_activity_time = time.time()
-render_start_time = None
+vast_boot_time = None
 server_running = True
+
+def record_vast_boot_time(ts=None):
+    global vast_boot_time
+    if ts is None:
+        ts = time.time()
+    vast_boot_time = ts
+    cfg = load_config()
+    cfg["last_boot_time"] = ts
+    save_config(cfg)
+    boot_str = time.strftime("%H:%M:%S", time.localtime(ts))
+    print(f"[*] ⏱️ Vast.ai session timer started at {boot_str}")
+
+def clear_vast_boot_time():
+    global vast_boot_time
+    vast_boot_time = None
+    cfg = load_config()
+    cfg.pop("last_boot_time", None)
+    save_config(cfg)
 
 current_job_config = {
     "start_frame": "",
@@ -111,6 +129,7 @@ def stop_instance_api():
     if "error" in res or res.get("success") is False:
         res = call_vast_api(f"instances/{inst_id}/stop/", method="POST")
     print(f"[💰 Cost Saver] Instance {inst_id} has been STOPPED. GPU billing ceased.")
+    clear_vast_boot_time()
 
 def start_instance_api():
     cfg = load_config()
@@ -118,6 +137,7 @@ def start_instance_api():
     if not inst_id:
         return
     print(f"\n[*] Starting Vast.ai Instance {inst_id}...")
+    record_vast_boot_time(time.time())
     res = call_vast_api(f"instances/{inst_id}/", method="PUT", data={"state": "running"})
     if "error" in res or res.get("success") is False:
         res = call_vast_api(f"instances/{inst_id}/start/", method="POST")
@@ -136,8 +156,8 @@ def get_usd_to_idr_rate():
     except Exception:
         return 17800.0
 
-def calculate_and_display_cost(elapsed_seconds):
-    """Calculates runtime, USD cost, and IDR cost with live exchange rate"""
+def calculate_and_display_cost(elapsed_seconds, boot_time=None, stop_time=None):
+    """Calculates runtime, USD cost, and IDR cost from instance power-on to power-off"""
     inst_info = get_instance_info()
     hourly_rate = 0.409
     if inst_info and "dph_total" in inst_info:
@@ -166,12 +186,17 @@ def calculate_and_display_cost(elapsed_seconds):
     formatted_idr = f"Rp {int(round(cost_idr)):,}".replace(",", ".")
     target_folder = (OUTPUT_DIR / active_job_name).resolve() if active_job_name else OUTPUT_DIR.resolve()
 
+    boot_str = time.strftime("%H:%M:%S", time.localtime(boot_time)) if boot_time else "Unknown"
+    stop_str = time.strftime("%H:%M:%S", time.localtime(stop_time)) if stop_time else time.strftime("%H:%M:%S")
+
     print("\n" + "=" * 65)
     print(" 🎉 RENDER COMPLETED ON VAST.AI!")
     print("=" * 65)
     print(f" 📁 Saved to:        {target_folder}")
     print(f" 🖼️  Total Frames:    {total_frames_received} frames")
     print(f" ⏱️  Total Run Time:  {time_str} ({(elapsed_seconds/3600.0):.3f} hours)")
+    print(f"    - Vast.ai Boot:  {boot_str}")
+    print(f"    - Vast.ai Stop:  {stop_str}")
     print(f" 💵 Vast.ai Rate:    ${hourly_rate:.3f}/hour")
     print(f" 💵 Total Cost (USD): ${cost_usd:.4f}")
     print(f" 🇮🇩 Total Cost (IDR): {formatted_idr} (Rate: ~Rp {int(idr_rate):,}/USD)")
@@ -228,10 +253,17 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        global total_frames_received, active_job_name, last_activity_time, render_start_time
+        global total_frames_received, active_job_name, last_activity_time, vast_boot_time
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         last_activity_time = time.time()
+
+        if not vast_boot_time:
+            saved_bt = load_config().get("last_boot_time")
+            if saved_bt:
+                vast_boot_time = float(saved_bt)
+            else:
+                record_vast_boot_time(time.time())
 
         if path == "/status":
             length = int(self.headers.get('Content-Length', 0))
@@ -246,11 +278,14 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             msg = self.rfile.read(length).decode("utf-8", errors="ignore")
             
-            elapsed = max(1.0, time.time() - (render_start_time if render_start_time else time.time()))
-            calculate_and_display_cost(elapsed)
+            stop_time = time.time()
+            saved_cfg = load_config()
+            boot_t = vast_boot_time or (float(saved_cfg.get("last_boot_time", stop_time)))
+            elapsed = max(1.0, stop_time - float(boot_t))
+            
+            calculate_and_display_cost(elapsed, boot_time=float(boot_t), stop_time=stop_time)
 
-            cfg = load_config()
-            if cfg.get("auto_stop", True):
+            if saved_cfg.get("auto_stop", True):
                 stop_instance_api()
 
             self.send_response(200)
@@ -374,7 +409,7 @@ def start_cloudflare_tunnel():
     return proc, tunnel_url
 
 def main():
-    global current_job_config
+    global current_job_config, vast_boot_time
     print("=" * 70)
     print(" 🚀 VAST.AI BLENDER RENDER RECEIVER (CLI)")
     print("=" * 70)
@@ -389,10 +424,19 @@ def main():
         dph = float(inst_data.get("dph_total", 0.409))
         if status == "RUNNING":
             print(f"[Vast.ai Status] 🟢 {status} ({gpu_name} | Rate: ${dph:.3f}/hr)")
+            if cfg.get("last_boot_time"):
+                vast_boot_time = float(cfg["last_boot_time"])
+                b_str = time.strftime("%H:%M:%S", time.localtime(vast_boot_time))
+                print(f"[*] ⏱️ Session timer active (Booted at {b_str})")
+            else:
+                record_vast_boot_time(time.time())
         else:
             print(f"[Vast.ai Status] ⚪ {status} (Storage Only: $0.009/hr - SAVING CREDITS)")
+            clear_vast_boot_time()
     else:
         print("[Vast.ai Status] Connected locally")
+        if not vast_boot_time:
+            record_vast_boot_time(time.time())
 
     # 2. Interactive Render Configuration
     print("\n--- ⚙️  Render Configuration ---")
@@ -465,7 +509,8 @@ def main():
     print("=" * 70)
     print(f"[*] Optimizations: Persistent Data ON | Auto-Scripts ON (-y) | Samples: {samples_in}")
     print(f"[*] Auto-Stop on Completion: {'YES (Will shut down instance)' if cfg['auto_stop'] else 'NO'}")
-    render_start_time = time.time()
+    if not vast_boot_time:
+        record_vast_boot_time(time.time())
     print("\n[*] Listening for incoming frames... (Press Ctrl+C to stop)\n")
 
     try:
@@ -476,6 +521,10 @@ def main():
         if tunnel_proc:
             tunnel_proc.terminate()
         server.shutdown()
+        if vast_boot_time:
+            now_t = time.time()
+            elapsed = max(1.0, now_t - vast_boot_time)
+            calculate_and_display_cost(elapsed, boot_time=vast_boot_time, stop_time=now_t)
 
 if __name__ == "__main__":
     main()

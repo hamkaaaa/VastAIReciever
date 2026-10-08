@@ -26,6 +26,7 @@ CONFIG_FILE = BASE_DIR / ".vast_config.json"
 total_frames_received = 0
 active_job_name = ""
 last_activity_time = time.time()
+render_start_time = None
 server_running = True
 
 current_job_config = {
@@ -111,6 +112,60 @@ def start_instance_api():
         res = call_vast_api(f"instances/{inst_id}/start/", method="POST")
     print(f"[✓] Start command sent to Vast.ai (Booting GPU container...)")
 
+def get_usd_to_idr_rate():
+    """Fetches real-time USD/IDR exchange rate with fallback"""
+    try:
+        req = urllib.request.Request(
+            "https://open.er-api.com/v6/latest/USD",
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+            return float(data.get("rates", {}).get("IDR", 17800.0))
+    except Exception:
+        return 17800.0
+
+def calculate_and_display_cost(elapsed_seconds):
+    """Calculates runtime, USD cost, and IDR cost with live exchange rate"""
+    inst_info = get_instance_info()
+    hourly_rate = 0.409
+    if inst_info and "dph_total" in inst_info:
+        try:
+            val = float(inst_info["dph_total"])
+            if val > 0:
+                hourly_rate = val
+        except Exception:
+            pass
+
+    cost_usd = (elapsed_seconds / 3600.0) * hourly_rate
+    idr_rate = get_usd_to_idr_rate()
+    cost_idr = cost_usd * idr_rate
+
+    hrs = int(elapsed_seconds // 3600)
+    mins = int((elapsed_seconds % 3600) // 60)
+    secs = int(elapsed_seconds % 60)
+
+    if hrs > 0:
+        time_str = f"{hrs}h {mins}m {secs}s"
+    elif mins > 0:
+        time_str = f"{mins}m {secs}s"
+    else:
+        time_str = f"{secs}s"
+
+    formatted_idr = f"Rp {int(round(cost_idr)):,}".replace(",", ".")
+    target_folder = (OUTPUT_DIR / active_job_name).resolve() if active_job_name else OUTPUT_DIR.resolve()
+
+    print("\n" + "=" * 65)
+    print(" 🎉 RENDER COMPLETED ON VAST.AI!")
+    print("=" * 65)
+    print(f" 📁 Saved to:        {target_folder}")
+    print(f" 🖼️  Total Frames:    {total_frames_received} frames")
+    print(f" ⏱️  Total Run Time:  {time_str} ({(elapsed_seconds/3600.0):.3f} hours)")
+    print(f" 💵 Vast.ai Rate:    ${hourly_rate:.3f}/hour")
+    print(f" 💵 Total Cost (USD): ${cost_usd:.4f}")
+    print(f" 🇮🇩 Total Cost (IDR): {formatted_idr} (Rate: ~Rp {int(idr_rate):,}/USD)")
+    print("=" * 65)
+
 class RenderReceiverHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -162,7 +217,7 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        global total_frames_received, active_job_name, last_activity_time
+        global total_frames_received, active_job_name, last_activity_time, render_start_time
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         last_activity_time = time.time()
@@ -179,11 +234,9 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         elif path == "/finish_job":
             length = int(self.headers.get('Content-Length', 0))
             msg = self.rfile.read(length).decode("utf-8", errors="ignore")
-            print(f"\n" + "=" * 65)
-            print(f" [✓] RENDER COMPLETED ON VAST.AI!")
-            print(f" Total frames saved: {total_frames_received}")
-            print(f" Output folder: {OUTPUT_DIR.resolve()}")
-            print("=" * 65)
+            
+            elapsed = max(1.0, time.time() - (render_start_time if render_start_time else time.time()))
+            calculate_and_display_cost(elapsed)
 
             cfg = load_config()
             if cfg.get("auto_stop", True):
@@ -379,7 +432,7 @@ def main():
     print("=" * 70)
     print(f"[*] Optimizations: Persistent Data ON | Auto-Scripts ON (-y) | Samples: {samples_in}")
     print(f"[*] Auto-Stop on Completion: {'YES (Will shut down instance)' if cfg['auto_stop'] else 'NO'}")
-    print(f"[*] Saving renders to: {OUTPUT_DIR.resolve()}")
+    render_start_time = time.time()
     print("\n[*] Listening for incoming frames... (Press Ctrl+C to stop)\n")
 
     try:

@@ -317,22 +317,53 @@ def main():
             import gdown
 
         dest_dir = Path("/workspace")
+        before_files = set(dest_dir.glob("*"))
+
+        # Extract file ID
+        m = re.search(r'/d/([a-zA-Z0-9_-]+)', gdrive_url) or re.search(r'id=([a-zA-Z0-9_-]+)', gdrive_url)
+        file_id = m.group(1) if m else None
+        direct_url = f"https://drive.google.com/uc?id={file_id}" if file_id else gdrive_url
+
         downloaded = None
+
+        # Strategy 1: Python gdown.download (no fuzzy keyword)
         try:
-            downloaded = gdown.download(gdrive_url, output=str(dest_dir) + "/", fuzzy=True, quiet=False)
+            downloaded = gdown.download(direct_url, output=str(dest_dir) + "/", quiet=False)
         except Exception as e:
             print(f"[!] Warning gdown: {e}")
 
+        # Check if downloaded
         if not downloaded or not Path(downloaded).exists():
-            # Try fuzzy id extraction
-            m = re.search(r'/d/([a-zA-Z0-9_-]+)', gdrive_url) or re.search(r'id=([a-zA-Z0-9_-]+)', gdrive_url)
-            if m:
-                file_id = m.group(1)
-                direct_url = f"https://drive.google.com/uc?id={file_id}"
-                try:
-                    downloaded = gdown.download(direct_url, output=str(dest_dir) + "/", fuzzy=True, quiet=False)
-                except Exception as e:
-                    print(f"[!] Warning gdown retry: {e}")
+            new_f = list(set(dest_dir.glob("*")) - before_files)
+            if new_f:
+                downloaded = str(new_f[0])
+
+        # Strategy 2: CLI gdown directly with original URL
+        if not downloaded or not Path(downloaded).exists():
+            print("[*] Mencoba download via gdown CLI...")
+            subprocess.run(["gdown", gdrive_url, "-O", str(dest_dir) + "/"])
+            new_f = list(set(dest_dir.glob("*")) - before_files)
+            if new_f:
+                downloaded = str(new_f[0])
+
+        # Strategy 3: CLI gdown with --fuzzy flag
+        if not downloaded or not Path(downloaded).exists():
+            print("[*] Mencoba download via gdown CLI --fuzzy...")
+            subprocess.run(["gdown", "--fuzzy", gdrive_url, "-O", str(dest_dir) + "/"])
+            new_f = list(set(dest_dir.glob("*")) - before_files)
+            if new_f:
+                downloaded = str(new_f[0])
+
+        # Strategy 4: Direct curl fallback
+        if not downloaded or not Path(downloaded).exists() and file_id:
+            print("[*] Mencoba download via direct curl...")
+            curl_target = str(dest_dir / "gdrive_project.zip")
+            curl_cmd = f"curl -sSL -c /tmp/gcookies.txt 'https://drive.google.com/uc?export=download&id={file_id}' > /tmp/gresp.html && " \
+                       f"CONFIRM=$(grep -o 'confirm=[a-zA-Z0-9_-]*' /tmp/gresp.html | head -n 1 | cut -d= -f2) && " \
+                       f"curl -sSL -b /tmp/gcookies.txt 'https://drive.google.com/uc?export=download&confirm='\"$CONFIRM\"'&id={file_id}' -o '{curl_target}'"
+            subprocess.run(curl_cmd, shell=True)
+            if Path(curl_target).exists() and Path(curl_target).stat().st_size > 1000:
+                downloaded = curl_target
 
         if not downloaded or not Path(downloaded).exists():
             print("[!] Error fatal: Gagal mengunduh file dari Google Drive! Pastikan link diset 'Anyone with link can view'.")

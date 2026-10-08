@@ -2,7 +2,8 @@
 """
 Vast.ai Worker Script
 Runs on Vast.ai Linux environment (Jupyter terminal or shell).
-Locates the .blend file, enables GPU, renders, and streams finished frames to your PC receiver in real-time.
+Locates the .blend file, enables GPU, renders, and streams newly rendered frames to your PC receiver in real-time.
+Guarantees each frame is uploaded only once, and creates a fresh isolated folder for each render session.
 """
 
 import os
@@ -27,7 +28,6 @@ def find_blender():
         if Path(c).is_file() and os.access(c, os.X_OK):
             return str(Path(c).resolve())
 
-    # Download portable Blender 4.2 if not found
     print("[*] Blender not found. Downloading portable Blender 4.2 LTS to /workspace/blender...")
     dl_cmd = """
     mkdir -p /workspace && cd /workspace && \
@@ -40,7 +40,7 @@ def find_blender():
     if ret.returncode == 0 and Path("/workspace/blender/blender").exists():
         return "/workspace/blender/blender"
 
-    print("[!] Failed to obtain Blender. Please install Blender or check disk space.")
+    print("[!] Failed to obtain Blender. Please check disk space.")
     sys.exit(1)
 
 def find_blend_file(explicit_path=None):
@@ -74,41 +74,42 @@ def find_blend_file(explicit_path=None):
     print(f"[*] Auto-selecting most recent: {selected.name}")
     return str(selected.resolve())
 
-def upload_frame_to_pc(file_path, server_url):
+def upload_frame_to_pc(file_path, server_url, job_id):
     """Uploads a single completed frame to the PC receiver"""
     file_path = Path(file_path)
     res = subprocess.run([
-        "curl", "-s", "-w", "%{http_code}",
+        "curl", "-s",
+        "-o", "/dev/null",
+        "-w", "%{http_code}",
         "-H", f"X-Filename: {file_path.name}",
+        "-H", f"X-Job: {job_id}",
         "--data-binary", f"@{file_path}",
         f"{server_url}/upload_frame"
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     
     code = res.stdout.strip()
-    if code in ("200", "OK"):
+    if res.returncode == 0 and code == "200":
         return True
     else:
-        print(f"\n[!] Upload error for {file_path.name}: HTTP {code} ({res.stderr.strip()})")
+        print(f"\n[!] Upload failed for {file_path.name}: HTTP {code} ({res.stderr.strip()})")
         return False
 
-def frame_uploader_daemon(output_dirs, server_url, stop_event):
-    """Monitors output directories and streams rendered frames to PC in real time"""
+def frame_uploader_daemon(output_dir, server_url, job_id, job_start_time, stop_event):
+    """Monitors the current job output directory and streams rendered frames to PC exactly once"""
     uploaded = set()
     while not stop_event.is_set():
-        for out_dir in output_dirs:
-            if not Path(out_dir).exists():
-                continue
-            for f in sorted(list(Path(out_dir).glob("*.*"))):
+        if output_dir.exists():
+            for f in sorted(list(output_dir.glob("*.*"))):
                 if f.suffix.lower() in [".png", ".jpg", ".jpeg", ".exr", ".mp4", ".mov", ".tga"]:
-                    if f.name not in uploaded:
-                        # Wait for frame to finish writing
+                    if f.name not in uploaded and f.stat().st_mtime >= (job_start_time - 2):
+                        # Verify file has finished writing
                         prev_size = f.stat().st_size
                         time.sleep(0.5)
                         if f.stat().st_size == prev_size and prev_size > 0:
-                            print(f"\n[PC Stream] 🚀 Sending {f.name} ({f.stat().st_size / 1024:.1f} KB) to your PC...")
-                            if upload_frame_to_pc(f, server_url):
+                            print(f"[PC Stream] 🚀 Uploading {f.name} ({f.stat().st_size / 1024:.1f} KB)...")
+                            if upload_frame_to_pc(f, server_url, job_id):
                                 uploaded.add(f.name)
-                                print(f"[PC Stream] ✓ {f.name} safely received on your PC!")
+                                print(f"[PC Stream] ✓ {f.name} delivered to PC (saved once)")
         time.sleep(1)
 
 def notify_pc_status(server_url, status_msg):
@@ -147,7 +148,12 @@ def main():
     blend_file = find_blend_file(args.blend)
     print(f"[✓] Scene: {blend_file}")
 
-    output_dir = Path("/workspace/render_output") / Path(blend_file).stem
+    # Generate isolated job ID and fresh directory for this specific render run
+    clean_stem = re.sub(r'[^\w\-\.]', '_', Path(blend_file).stem)
+    job_id = f"{clean_stem}_{time.strftime('%Y%m%d_%H%M%S')}"
+    job_start_time = time.time()
+
+    output_dir = Path("/workspace/render_output") / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
     gpu_script = Path(__file__).parent / "enable_gpu.py"
@@ -181,17 +187,21 @@ except Exception as e:
     else:
         frame_args = ["-a"]
 
-    # Start background uploader monitoring render_output
+    # Start background uploader monitoring ONLY the fresh job directory
     stop_event = threading.Event()
-    watch_dirs = [output_dir]
-    uploader_thread = threading.Thread(target=frame_uploader_daemon, args=(watch_dirs, server_url, stop_event), daemon=True)
+    uploader_thread = threading.Thread(
+        target=frame_uploader_daemon,
+        args=(output_dir, server_url, job_id, job_start_time, stop_event),
+        daemon=True
+    )
     uploader_thread.start()
 
     print("\n" + "=" * 60)
     print(" 🔥 RENDERING IN PROGRESS (GPU OPTIX/CUDA)...")
-    print(f" Output folder: {output_dir}")
+    print(f" Job ID: {job_id}")
+    print(f" Fresh Output Folder: {output_dir}")
     print("=" * 60)
-    notify_pc_status(server_url, f"Rendering started for {Path(blend_file).name}")
+    notify_pc_status(server_url, f"Rendering job {job_id} started")
 
     render_cmd = [
         blender_bin,
@@ -210,13 +220,12 @@ except Exception as e:
     except KeyboardInterrupt:
         print("\n[!] Render interrupted by user.")
     finally:
-        # Give remaining frames time to upload
         time.sleep(2)
         stop_event.set()
         uploader_thread.join(timeout=15)
-        notify_pc_status(server_url, f"Done with {Path(blend_file).name}")
+        notify_pc_status(server_url, f"Job {job_id} finished")
         print("\n" + "=" * 60)
-        print(" [✓] JOB FINISHED.")
+        print(f" [✓] JOB {job_id} COMPLETED.")
         print("=" * 60)
 
 if __name__ == "__main__":

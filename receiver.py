@@ -2,7 +2,7 @@
 """
 PC Receiver for Vast.ai Blender Renders
 Compatible with Python 3.8 through Python 3.14+.
-Uses Cloudflare Tunnel for high-speed, reliable, unrestricted frame delivery to your PC.
+Creates a new dedicated folder for every render job and prevents duplicate frame deliveries.
 """
 
 import os
@@ -21,8 +21,8 @@ BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "renders"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-first_frame_received = False
-total_frames = 0
+opened_jobs = set()
+job_frame_counts = {}
 
 class RenderReceiverHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -43,7 +43,7 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"PC Receiver Online\n")
 
     def do_POST(self):
-        global first_frame_received, total_frames
+        global opened_jobs, job_frame_counts
         parsed = urllib.parse.urlparse(self.path)
 
         if parsed.path == "/status":
@@ -57,6 +57,17 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
 
         elif parsed.path == "/upload_frame":
             content_length = int(self.headers.get('Content-Length', 0))
+            
+            # Extract and sanitize Job ID
+            raw_job = self.headers.get('X-Job', 'default_job')
+            job_name = re.sub(r'[\r\n\t\x00]', '', raw_job).strip().strip('"\'')
+            job_name = re.sub(r'[^\w\-\.]', '_', job_name) or "render_job"
+
+            # Create new folder for this specific render job
+            target_job_dir = OUTPUT_DIR / job_name
+            target_job_dir.mkdir(parents=True, exist_ok=True)
+
+            # Extract and sanitize Filename
             raw_filename = self.headers.get('X-Filename', '')
             if raw_filename:
                 filename = re.sub(r'[\r\n\t\x00]', '', raw_filename).strip().strip('"\'')
@@ -69,8 +80,8 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
                 filename = f"frame_{int(time.time()*1000)}.png"
 
             filename = os.path.basename(filename)
-            target_path = OUTPUT_DIR / filename
-            temp_path = OUTPUT_DIR / f".tmp_{filename}"
+            target_path = target_job_dir / filename
+            temp_path = target_job_dir / f".tmp_{filename}"
 
             # Stream binary body directly to disk
             bytes_left = content_length
@@ -84,7 +95,7 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
                     f.write(chunk)
                     bytes_left -= len(chunk)
 
-            # Safe rename on Windows
+            # Safe replace on Windows
             try:
                 if target_path.exists():
                     try:
@@ -99,14 +110,16 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-            total_frames += 1
+            count = job_frame_counts.get(job_name, 0) + 1
+            job_frame_counts[job_name] = count
             size_kb = target_path.stat().st_size / 1024
-            print(f"[✓ FRAME RECEIVED] {filename} ({size_kb:.1f} KB) saved to renders/ (Total: {total_frames})")
+            print(f"[✓ FRAME RECEIVED] {job_name}/{filename} ({size_kb:.1f} KB) [Frames in job: {count}]")
 
-            if not first_frame_received:
-                first_frame_received = True
+            # Pop open folder in explorer once for this new job
+            if job_name not in opened_jobs:
+                opened_jobs.add(job_name)
                 try:
-                    os.system(f'explorer "{OUTPUT_DIR.resolve()}"')
+                    os.system(f'explorer "{target_job_dir.resolve()}"')
                 except Exception:
                     pass
 
@@ -119,7 +132,6 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 def start_cloudflare_tunnel():
-    """Starts Cloudflare Tunnel using local cloudflared.exe"""
     cloudflared_bin = BASE_DIR / "cloudflared.exe"
     if not cloudflared_bin.exists():
         cloudflared_bin = "cloudflared"
@@ -149,17 +161,15 @@ def start_cloudflare_tunnel():
 
 def main():
     print("=" * 70)
-    print(" 📡 VAST.AI PC RENDER RECEIVER (CLOUDFLARE ACCELERATED)")
-    print(f" Saves renders to: {OUTPUT_DIR.resolve()}")
+    print(" 📡 VAST.AI PC RENDER RECEIVER")
+    print(f" Output directory: {OUTPUT_DIR.resolve()}")
     print("=" * 70)
 
-    # Start local HTTP server on port 8888
     server = HTTPServer(("0.0.0.0", 8888), RenderReceiverHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     print("[✓] Local receiver active on port 8888")
 
-    # Start Cloudflare tunnel
     tunnel_proc, tunnel_url = start_cloudflare_tunnel()
 
     if not tunnel_url:
@@ -167,12 +177,11 @@ def main():
         sys.exit(1)
 
     print("\n" + "=" * 70)
-    print(" 🎯 COPY & RUN THIS ONE LINE IN YOUR JUPYTER TERMINAL:")
+    print(" 🎯 ONE COMMAND TO RUN IN VAST.AI JUPYTER TERMINAL:")
     print("=" * 70)
     print(f"\ncurl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- --server {tunnel_url}\n")
     print("=" * 70)
-    print("[*] Receiver listening! Renders will stream directly to your PC...")
-    print("[*] (Do not close this window)\n")
+    print("[*] Listening for incoming renders... (Press Ctrl+C to stop)\n")
 
     try:
         while True:

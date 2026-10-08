@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 renders/
 .last_vast_ssh.txt
+.vast_config.json
 *.tar.gz
 *.blend

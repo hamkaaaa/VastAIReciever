@@ -225,6 +225,13 @@ except Exception as e:
         stop_event.set()
         uploader_thread.join(timeout=15)
         notify_pc_status(server_url, f"Job {job_id} finished")
+        
+        # Trigger PC Auto-Stop integration if enabled
+        try:
+            subprocess.run(["curl", "-s", "-d", f"Job {job_id} completed successfully", f"{server_url}/finish_job"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
         print("\n" + "=" * 60)
         print(f" [✓] JOB {job_id} COMPLETED.")
         print("=" * 60)

@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vast.ai Render Hub & Live Frame Viewer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #090a0f;
+      --bg-card: rgba(18, 20, 29, 0.75);
+      --bg-card-hover: rgba(26, 29, 43, 0.85);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-accent: rgba(99, 102, 241, 0.3);
+      --accent-primary: #6366f1;
+      --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+      --accent-glow: rgba(99, 102, 241, 0.25);
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-dark);
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 85% 85%, rgba(236, 72, 153, 0.05) 0%, transparent 40%);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* TOP BAR */
+    header {
+      background: rgba(13, 15, 22, 0.8);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: var(--accent-gradient);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 18px;
+      color: white;
+      box-shadow: 0 4px 16px var(--accent-glow);
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-badge {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 2px 8px;
+      border-radius: 6px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #a5b4fc;
+      font-weight: 600;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    /* INSTANCE CONTROL WIDGET */
+    .instance-widget {
+      display: flex;
+      align-items: center;
+      background: rgba(22, 25, 38, 0.7);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 4px 6px;
+      gap: 10px;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 8px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-dim);
+    }
+
+    .status-running .status-dot {
+      background: var(--success);
+      box-shadow: 0 0 10px var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    .status-running {
+      color: var(--success);
+      background: rgba(16, 185, 129, 0.1);
+    }
+
+    .status-stopped .status-dot {
+      background: var(--text-dim);
+    }
+
+    .status-stopped {
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .cost-meter {
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      color: #94a3b8;
+      padding: 0 8px;
+      border-left: 1px solid var(--border-color);
+    }
+
+    .cost-meter span {
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    .btn {
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.25);
+      border-color: rgba(239, 68, 68, 0.5);
+      color: white;
+    }
+
+    .btn-success {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.3);
+      color: #6ee7b7;
+    }
+
+    .btn-success:hover {
+      background: rgba(16, 185, 129, 0.25);
+      border-color: rgba(16, 185, 129, 0.5);
+      color: white;
+    }
+
+    .btn-ghost {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--border-color);
+      color: var(--text-muted);
+    }
+
+    .btn-ghost:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+    }
+
+    /* MAIN LAYOUT */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 20px;
+      padding: 20px 24px;
+      max-width: 1800px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* PLAYER CONTAINER */
+    .player-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+    }
+
+    .player-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .job-selector-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .job-selector-wrap label {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    select.job-select {
+      background: rgba(15, 17, 26, 0.8);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .live-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+
+    .live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--danger);
+      animation: pulse 1.5s infinite;
+    }
+
+    /* VIEWPORT */
+    .viewport {
+      flex: 1;
+      min-height: 480px;
+      background: #050608;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background-image: 
+        radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+
+    .viewport img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
+      transition: opacity 0.1s ease;
+      user-select: none;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-dim);
+    }
+
+    .empty-state svg {
+      width: 48px;
+      height: 48px;
+      opacity: 0.4;
+    }
+
+    /* PLAYER CONTROLS */
+    .player-controls {
+      background: rgba(13, 16, 24, 0.9);
+      border-top: 1px solid var(--border-color);
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .timeline-container {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .scrubber {
+      flex: 1;
+      height: 8px;
+      -webkit-appearance: none;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      outline: none;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .scrubber::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: white;
+      box-shadow: 0 0 10px var(--accent-primary);
+      cursor: grab;
+      border: 3px solid var(--accent-primary);
+    }
+
+    .frame-counter {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 600;
+      color: #e2e8f0;
+      min-width: 110px;
+      text-align: right;
+    }
+
+    .playback-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .playback-buttons {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .ctrl-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .ctrl-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .ctrl-btn-play {
+      background: var(--accent-primary);
+      border-color: var(--accent-primary);
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px var(--accent-glow);
+    }
+
+    .ctrl-btn-play:hover {
+      background: #4f46e5;
+    }
+
+    .speed-select {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      outline: none;
+    }
+
+    /* FILMSTRIP THUMBNAILS */
+    .filmstrip-card {
+      border-top: 1px solid var(--border-color);
+      padding: 12px 16px;
+      background: rgba(0, 0, 0, 0.3);
+      overflow-x: auto;
+      white-space: nowrap;
+      display: flex;
+      gap: 8px;
+    }
+
+    .filmstrip-card::-webkit-scrollbar {
+      height: 6px;
+    }
+
+    .filmstrip-card::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+    }
+
+    .thumb-item {
+      display: inline-block;
+      width: 80px;
+      height: 52px;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 2px solid transparent;
+      cursor: pointer;
+      position: relative;
+      flex-shrink: 0;
+      background: #111;
+      transition: all 0.15s ease;
+    }
+
+    .thumb-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .thumb-item.active {
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 10px var(--accent-glow);
+      transform: scale(1.05);
+    }
+
+    .thumb-number {
+      position: absolute;
+      bottom: 2px;
+      right: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      font-weight: 700;
+      background: rgba(0, 0, 0, 0.8);
+      padding: 1px 4px;
+      border-radius: 3px;
+      color: white;
+    }
+
+    /* SIDEBAR / CONTROLS */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .side-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #f1f5f9;
+    }
+
+    .setting-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .setting-label {
+      font-size: 13px;
+      color: var(--text-main);
+      font-weight: 500;
+    }
+
+    .setting-desc {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+
+    /* TOGGLE SWITCH */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: rgba(255, 255, 255, 0.15);
+      transition: .2s;
+      border-radius: 24px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .2s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-color: var(--accent-primary);
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(20px);
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-group label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .form-input {
+      background: rgba(10, 12, 18, 0.8);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: 'JetBrains Mono', monospace;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-input:focus {
+      border-color: var(--accent-primary);
+    }
+
+    .info-tip {
+      background: rgba(99, 102, 241, 0.08);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 12px;
+      color: #c7d2fe;
+      line-height: 1.5;
+    }
+
+    .info-tip strong {
+      color: white;
+      font-weight: 600;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.1); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span class="brand-title">VastAI Render Hub</span>
+          <span class="brand-badge">RTX 4090</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <!-- Vast Instance Quick Switcher -->
+      <div class="instance-widget">
+        <div id="instanceStatusBadge" class="status-indicator status-stopped">
+          <span class="status-dot"></span>
+          <span id="instanceStatusText">CHECKING...</span>
+        </div>
+
+        <div class="cost-meter">
+          Rate: <span id="hourlyRateText">$0.409/hr</span>
+        </div>
+
+        <button id="btnStopInstance" class="btn btn-danger" onclick="toggleInstance('stop')">
+          ⏹ Stop Instance
+        </button>
+        <button id="btnStartInstance" class="btn btn-success" style="display: none;" onclick="toggleInstance('start')">
+          ▶ Start Instance
+        </button>
+      </div>
+
+      <button class="btn btn-ghost" onclick="toggleConfigDrawer()">
+        ⚙ Settings
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN APP -->
+  <main>
+    <!-- LEFT: PLAYER CARD -->
+    <div class="player-card">
+      <div class="player-header">
+        <div class="job-selector-wrap">
+          <label>Job:</label>
+          <select id="jobSelector" class="job-select" onchange="onJobChange()">
+            <option value="">Loading jobs...</option>
+          </select>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div id="liveBadge" class="live-badge" style="display: none;">
+            <span class="live-dot"></span>
+            <span>RENDERING LIVE</span>
+          </div>
+          <button class="btn btn-ghost" style="padding: 4px 8px;" onclick="openRendersFolder()">
+            📁 Open Folder
+          </button>
+        </div>
+      </div>
+
+      <!-- VIEWPORT -->
+      <div class="viewport" id="viewport">
+        <div id="emptyState" class="empty-state">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+          <p>Waiting for frames from Vast.ai...</p>
+        </div>
+        <img id="mainImage" style="display: none;" alt="Render Frame">
+      </div>
+
+      <!-- CONTROLS -->
+      <div class="player-controls">
+        <div class="timeline-container">
+          <input type="range" id="frameScrubber" class="scrubber" min="0" max="0" value="0" oninput="onScrub(this.value)">
+          <div id="frameCounter" class="frame-counter">0 / 0</div>
+        </div>
+
+        <div class="playback-bar">
+          <div class="playback-buttons">
+            <button class="ctrl-btn" onclick="stepFrame(-1)" title="Previous Frame">⏮</button>
+            <button id="btnPlayPause" class="ctrl-btn ctrl-btn-play" onclick="togglePlay()" title="Play / Pause">▶</button>
+            <button class="ctrl-btn" onclick="stepFrame(1)" title="Next Frame">⏭</button>
+            <button class="ctrl-btn" onclick="jumpToLatest()" title="Latest Frame">⏩</button>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <label style="font-size: 12px; color: var(--text-muted); font-weight: 500;">Speed:</label>
+            <select id="fpsSelector" class="speed-select" onchange="setFps(this.value)">
+              <option value="12">12 fps</option>
+              <option value="24" selected>24 fps (Film)</option>
+              <option value="30">30 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+            <button class="ctrl-btn" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- FILMSTRIP -->
+      <div class="filmstrip-card" id="filmstrip">
+        <!-- Thumbnails populated here -->
+      </div>
+    </div>
+
+    <!-- RIGHT: COST EFFICIENCY & INSTANCE CONTROLS -->
+    <div class="sidebar">
+      <!-- COST SAVINGS CARD -->
+      <div class="side-card">
+        <div class="card-title">
+          <span>💰</span> Cost Optimization
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">Auto-Stop on Finish</div>
+            <div class="setting-desc">Shuts down instance the second render finishes</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="chkAutoStop" checked onchange="saveConfig()">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">Idle Auto-Stop</div>
+            <div class="setting-desc">Power down if inactive for 10 minutes</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="chkIdleStop" checked onchange="saveConfig()">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="info-tip">
+          💡 <strong>Pro Tip:</strong> An idle RTX 4090 costs <strong>$0.409/hr</strong>. When STOPPED, you only pay storage (<strong>~$0.005/hr</strong>), saving <strong>98%</strong> of credits!
+        </div>
+      </div>
+
+      <!-- VAST CONFIG CARD -->
+      <div class="side-card" id="configCard">
+        <div class="card-title">
+          <span>⚙</span> Vast.ai Credentials
+        </div>
+
+        <div class="form-group">
+          <label>Vast.ai API Key:</label>
+          <input type="password" id="inputApiKey" class="form-input" placeholder="Paste Vast API Key..." onchange="saveConfig()">
+          <span style="font-size: 11px; color: var(--text-dim);">
+            Get it at <a href="https://cloud.vast.ai/account/" target="_blank" style="color: #818cf8; text-decoration: none;">cloud.vast.ai/account</a>
+          </span>
+        </div>
+
+        <div class="form-group">
+          <label>Instance ID:</label>
+          <input type="text" id="inputInstanceId" class="form-input" placeholder="e.g. 54816424" value="54816424" onchange="saveConfig()">
+        </div>
+
+        <button class="btn btn-ghost" style="width: 100%; justify-content: center;" onclick="testInstanceConnection()">
+          Test Vast.ai Connection
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let frames = [];
+    let currentFrameIndex = 0;
+    let isPlaying = false;
+    let playInterval = null;
+    let fps = 24;
+    let currentJob = "";
+    let autoStopOnFinish = true;
+
+    // Load initial config
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        const data = await res.json();
+        if (data.api_key) document.getElementById('inputApiKey').value = data.api_key;
+        if (data.instance_id) document.getElementById('inputInstanceId').value = data.instance_id;
+        document.getElementById('chkAutoStop').checked = data.auto_stop !== false;
+        document.getElementById('chkIdleStop').checked = data.idle_stop !== false;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function saveConfig() {
+      const payload = {
+        api_key: document.getElementById('inputApiKey').value.trim(),
+        instance_id: document.getElementById('inputInstanceId').value.trim(),
+        auto_stop: document.getElementById('chkAutoStop').checked,
+        idle_stop: document.getElementById('chkIdleStop').checked
+      };
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      fetchInstanceStatus();
+    }
+
+    // Instance Status & Control
+    async function fetchInstanceStatus() {
+      try {
+        const res = await fetch('/api/instance_status');
+        const data = await res.json();
+        const badge = document.getElementById('instanceStatusBadge');
+        const txt = document.getElementById('instanceStatusText');
+        const btnStop = document.getElementById('btnStopInstance');
+        const btnStart = document.getElementById('btnStartInstance');
+        const rateTxt = document.getElementById('hourlyRateText');
+
+        if (data.actual_status === 'running') {
+          badge.className = 'status-indicator status-running';
+          txt.innerText = 'RUNNING';
+          btnStop.style.display = 'inline-flex';
+          btnStart.style.display = 'none';
+        } else if (data.actual_status === 'stopped') {
+          badge.className = 'status-indicator status-stopped';
+          txt.innerText = 'STOPPED (SAVING CREDITS)';
+          btnStop.style.display = 'none';
+          btnStart.style.display = 'inline-flex';
+        } else {
+          txt.innerText = data.actual_status ? data.actual_status.toUpperCase() : 'READY';
+        }
+
+        if (data.dph_total) {
+          rateTxt.innerText = `$${parseFloat(data.dph_total).toFixed(3)}/hr`;
+        }
+      } catch (e) {
+        // Silent polling
+      }
+    }
+
+    async function toggleInstance(action) {
+      if (action === 'stop' && !confirm('Stop Vast.ai instance now to save credits?')) return;
+      try {
+        const res = await fetch('/api/instance_action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action })
+        });
+        const result = await res.json();
+        alert(result.message || 'Action sent!');
+        fetchInstanceStatus();
+      } catch (e) {
+        alert('Failed: ' + e);
+      }
+    }
+
+    // Jobs & Frames polling
+    async function fetchJobs() {
+      try {
+        const res = await fetch('/api/jobs');
+        const jobList = await res.json();
+        const sel = document.getElementById('jobSelector');
+        
+        const prevVal = sel.value;
+        sel.innerHTML = '';
+        jobList.forEach(j => {
+          const opt = document.createElement('option');
+          opt.value = j;
+          opt.innerText = j;
+          sel.appendChild(opt);
+        });
+
+        if (prevVal && jobList.includes(prevVal)) {
+          sel.value = prevVal;
+        } else if (jobList.length > 0) {
+          sel.value = jobList[0];
+        }
+        currentJob = sel.value;
+        fetchFrames();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function fetchFrames() {
+      if (!currentJob) return;
+      try {
+        const res = await fetch(`/api/frames?job=${encodeURIComponent(currentJob)}`);
+        const frameList = await res.json();
+        
+        const hadZero = frames.length === 0;
+        const newFramesAdded = frameList.length > frames.length;
+        frames = frameList;
+
+        document.getElementById('frameScrubber').max = Math.max(0, frames.length - 1);
+        document.getElementById('frameCounter').innerText = `${frames.length > 0 ? currentFrameIndex + 1 : 0} / ${frames.length}`;
+
+        if (frames.length > 0) {
+          document.getElementById('emptyState').style.display = 'none';
+          document.getElementById('mainImage').style.display = 'block';
+          if (hadZero || (!isPlaying && newFramesAdded)) {
+            // Jump to latest frame if not actively playing
+            showFrame(frames.length - 1);
+          }
+          renderFilmstrip();
+        } else {
+          document.getElementById('emptyState').style.display = 'flex';
+          document.getElementById('mainImage').style.display = 'none';
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function showFrame(index) {
+      if (index < 0 || index >= frames.length) return;
+      currentFrameIndex = index;
+      const img = document.getElementById('mainImage');
+      img.src = `/renders/${encodeURIComponent(currentJob)}/${encodeURIComponent(frames[index])}`;
+      
+      document.getElementById('frameScrubber').value = index;
+      document.getElementById('frameCounter').innerText = `${index + 1} / ${frames.length}`;
+
+      // Update filmstrip active state
+      document.querySelectorAll('.thumb-item').forEach((el, idx) => {
+        el.classList.toggle('active', idx === index);
+      });
+    }
+
+    function renderFilmstrip() {
+      const container = document.getElementById('filmstrip');
+      // Only re-render if count changed to avoid DOM thrashing
+      if (container.children.length === frames.length) return;
+      
+      container.innerHTML = '';
+      frames.forEach((f, idx) => {
+        const div = document.createElement('div');
+        div.className = `thumb-item ${idx === currentFrameIndex ? 'active' : ''}`;
+        div.onclick = () => showFrame(idx);
+        
+        const img = document.createElement('img');
+        img.src = `/renders/${encodeURIComponent(currentJob)}/${encodeURIComponent(f)}`;
+        img.loading = 'lazy';
+
+        const num = document.createElement('div');
+        num.className = 'thumb-number';
+        num.innerText = idx + 1;
+
+        div.appendChild(img);
+        div.appendChild(num);
+        container.appendChild(div);
+      });
+    }
+
+    function onScrub(val) {
+      pause();
+      showFrame(parseInt(val));
+    }
+
+    function stepFrame(step) {
+      pause();
+      let next = currentFrameIndex + step;
+      if (next < 0) next = frames.length - 1;
+      if (next >= frames.length) next = 0;
+      showFrame(next);
+    }
+
+    function jumpToLatest() {
+      pause();
+      showFrame(frames.length - 1);
+    }
+
+    function togglePlay() {
+      if (isPlaying) {
+        pause();
+      } else {
+        play();
+      }
+    }
+
+    function play() {
+      if (frames.length === 0) return;
+      isPlaying = true;
+      document.getElementById('btnPlayPause').innerText = '⏸';
+      clearInterval(playInterval);
+      playInterval = setInterval(() => {
+        let next = currentFrameIndex + 1;
+        if (next >= frames.length) next = 0;
+        showFrame(next);
+      }, 1000 / fps);
+    }
+
+    function pause() {
+      isPlaying = false;
+      document.getElementById('btnPlayPause').innerText = '▶';
+      clearInterval(playInterval);
+    }
+
+    function setFps(newFps) {
+      fps = parseInt(newFps);
+      if (isPlaying) play();
+    }
+
+    function onJobChange() {
+      currentJob = document.getElementById('jobSelector').value;
+      frames = [];
+      currentFrameIndex = 0;
+      pause();
+      fetchFrames();
+    }
+
+    function openRendersFolder() {
+      fetch('/api/open_folder?job=' + encodeURIComponent(currentJob));
+    }
+
+    function toggleFullscreen() {
+      const vp = document.getElementById('viewport');
+      if (!document.fullscreenElement) {
+        vp.requestFullscreen().catch(err => alert(err.message));
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    function toggleConfigDrawer() {
+      const card = document.getElementById('configCard');
+      card.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    async function testInstanceConnection() {
+      await saveConfig();
+      fetchInstanceStatus();
+      alert('Config saved and instance status refreshed!');
+    }
+
+    // Keyboard Shortcuts
+    window.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.code === 'ArrowLeft') {
+        stepFrame(-1);
+      } else if (e.code === 'ArrowRight') {
+        stepFrame(1);
+      }
+    });
+
+    // Init
+    loadConfig();
+    fetchJobs();
+    fetchInstanceStatus();
+
+    // Auto-refresh loops
+    setInterval(fetchJobs, 3000);
+    setInterval(fetchInstanceStatus, 15000);
+  </script>
+</body>
+</html>

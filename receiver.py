@@ -19,6 +19,11 @@ import urllib.request
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
+
 class ThreadedReceiverServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -373,33 +378,60 @@ def wait_for_instance_running(inst_id, timeout=180):
     print("[!] Waktu tunggu habis. Instance mungkin masih initializing.")
     return None
 
-def auto_execute_command_via_ssh(ssh_host, ssh_port, cmd_string, max_retries=20):
-    """Automatically connects via SSH and executes the render command on Vast.ai"""
-    print(f"[*] 🔌 Menghubungkan SSH otomatis ke root@{ssh_host}:{ssh_port}...")
-    for attempt in range(max_retries):
-        test_res = subprocess.run([
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=NUL",
-            "-o", "ConnectTimeout=4",
-            "-p", str(ssh_port),
-            f"root@{ssh_host}",
-            "echo READY"
-        ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+def check_skip_pressed():
+    if msvcrt and msvcrt.kbhit():
+        ch = msvcrt.getch()
+        try:
+            key = ch.decode("utf-8", errors="ignore").lower()
+        except Exception:
+            key = ""
+        if key in ("p", "s", "q", "\r", "\n", " "):
+            return True
+    return False
 
-        if "READY" in test_res.stdout:
-            print("[✓] SSH terhubung! Menjalankan setup Blender & render secara otomatis di Vast.ai...")
-            proc = subprocess.Popen([
+def auto_execute_command_via_ssh(ssh_host, ssh_port, cmd_string, max_retries=6):
+    """Automatically connects via SSH and executes render command, or skips immediately if 'p' key is pressed"""
+    print(f"\n[*] 🔌 Menghubungkan SSH otomatis ke root@{ssh_host}:{ssh_port}...")
+    print("    👉 [TEKAN TOMBOL 'P' KAPAN SAJA UNTUK LANGSUNG SKIP KE MANUAL / JUPYTER]")
+
+    for attempt in range(max_retries):
+        if check_skip_pressed():
+            print("\n[⏩ SKIP] Tombol 'p' ditekan! Beralih langsung ke perintah manual...")
+            return None
+
+        try:
+            test_res = subprocess.run([
                 "ssh",
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=NUL",
+                "-o", "ConnectTimeout=3",
                 "-p", str(ssh_port),
                 f"root@{ssh_host}",
-                cmd_string
-            ])
-            return proc
-        time.sleep(3)
-    print("[!] SSH belum merespon dalam waktu yang ditentukan.")
+                "echo READY"
+            ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=4)
+
+            if "READY" in test_res.stdout:
+                print("[✓] SSH terhubung! Menjalankan setup Blender & render secara otomatis di Vast.ai...")
+                proc = subprocess.Popen([
+                    "ssh",
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "UserKnownHostsFile=NUL",
+                    "-p", str(ssh_port),
+                    f"root@{ssh_host}",
+                    cmd_string
+                ])
+                return proc
+        except Exception:
+            pass
+
+        # Check for keypress during pause
+        for _ in range(8):
+            if check_skip_pressed():
+                print("\n[⏩ SKIP] Tombol 'p' ditekan! Beralih langsung ke perintah manual...")
+                return None
+            time.sleep(0.2)
+
+    print("[!] SSH otomatis belum terhubung.")
     return None
 
 def get_usd_to_idr_rate():
@@ -950,11 +982,19 @@ def main():
         ssh_proc = auto_execute_command_via_ssh(ssh_host, ssh_port, vast_cmd)
 
     if not ssh_proc:
-        print("\n" + "=" * 70)
-        print(" 🎯 JIKA SSH TIDAK OTOMATIS BERJALAN, JALANKAN PERINTAH INI DI TERMINAL JUPYTER:")
-        print("=" * 70)
+        copied_banner = ""
+        try:
+            p_clip = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
+            p_clip.communicate(vast_cmd.encode("utf-8"))
+            copied_banner = " [📋 DISALIN KE CLIPBOARD - TINGGAL PASTE / CTRL+V DI TERMINAL]"
+        except Exception:
+            pass
+
+        print("\n" + "=" * 78)
+        print(f" 🎯 JALANKAN PERINTAH INI DI TERMINAL JUPYTER VAST.AI{copied_banner}:")
+        print("=" * 78)
         print(f"\n{vast_cmd}\n")
-        print("=" * 70)
+        print("=" * 78)
 
     print(f"[*] Optimizations: Persistent Data ON | Auto-Scripts ON (-y) | Samples: {samples_in}")
     print(f"[*] Auto-Stop on Completion: {'YES (Will shut down instance)' if cfg['auto_stop'] else 'NO'}")

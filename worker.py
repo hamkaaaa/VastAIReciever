@@ -12,8 +12,6 @@ import time
 import argparse
 import subprocess
 import threading
-import urllib.request
-import urllib.parse
 from pathlib import Path
 
 def find_blender():
@@ -62,7 +60,6 @@ def find_blend_file(explicit_path=None):
             all_blends.extend(list(d.glob("*.blend")))
             all_blends.extend(list(d.glob("**/*.blend")))
 
-    # Deduplicate and sort by modification time (most recent first)
     unique_blends = sorted(list(set(all_blends)), key=lambda p: p.stat().st_mtime, reverse=True)
 
     if not unique_blends:
@@ -80,35 +77,43 @@ def find_blend_file(explicit_path=None):
 def upload_frame_to_pc(file_path, server_url):
     """Uploads a single completed frame to the PC receiver"""
     file_path = Path(file_path)
-    ret = subprocess.run([
-        "curl", "-s",
+    res = subprocess.run([
+        "curl", "-s", "-w", "%{http_code}",
         "-H", f"X-Filename: {file_path.name}",
         "--data-binary", f"@{file_path}",
         f"{server_url}/upload_frame"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return ret.returncode == 0
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    
+    code = res.stdout.strip()
+    if code in ("200", "OK"):
+        return True
+    else:
+        print(f"\n[!] Upload error for {file_path.name}: HTTP {code} ({res.stderr.strip()})")
+        return False
 
-def frame_uploader_daemon(output_dir, server_url, stop_event):
-    """Monitors output directory and streams rendered frames to PC in real time"""
+def frame_uploader_daemon(output_dirs, server_url, stop_event):
+    """Monitors output directories and streams rendered frames to PC in real time"""
     uploaded = set()
-    while not stop_event.is_set() or len(uploaded) < len(list(Path(output_dir).glob("*.*"))):
-        current_files = sorted(list(Path(output_dir).glob("*.*")))
-        for f in current_files:
-            if f.suffix.lower() in [".png", ".jpg", ".jpeg", ".exr", ".mp4", ".mov"]:
-                if f.name not in uploaded:
-                    # Check if file has finished writing
-                    prev_size = f.stat().st_size
-                    time.sleep(0.5)
-                    if f.stat().st_size == prev_size and prev_size > 0:
-                        success = upload_frame_to_pc(f, server_url)
-                        if success:
-                            uploaded.add(f.name)
-                            print(f"[PC Stream] -> Uploaded {f.name} ({f.stat().st_size / 1024:.1f} KB) to PC receiver")
+    while not stop_event.is_set():
+        for out_dir in output_dirs:
+            if not Path(out_dir).exists():
+                continue
+            for f in sorted(list(Path(out_dir).glob("*.*"))):
+                if f.suffix.lower() in [".png", ".jpg", ".jpeg", ".exr", ".mp4", ".mov", ".tga"]:
+                    if f.name not in uploaded:
+                        # Wait for frame to finish writing
+                        prev_size = f.stat().st_size
+                        time.sleep(0.5)
+                        if f.stat().st_size == prev_size and prev_size > 0:
+                            print(f"\n[PC Stream] 🚀 Sending {f.name} ({f.stat().st_size / 1024:.1f} KB) to your PC...")
+                            if upload_frame_to_pc(f, server_url):
+                                uploaded.add(f.name)
+                                print(f"[PC Stream] ✓ {f.name} safely received on your PC!")
         time.sleep(1)
 
 def notify_pc_status(server_url, status_msg):
     try:
-        subprocess.run(["curl", "-s", "-d", status_msg, f"{server_url}/status"], stdout=subprocess.DEVNULL)
+        subprocess.run(["curl", "-s", "-d", status_msg, f"{server_url}/status"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
@@ -124,20 +129,20 @@ def main():
     server_url = args.server.rstrip("/")
     print("=" * 60)
     print(" 🚀 VAST.AI BLENDER RENDER WORKER")
-    print(f" Target Receiver: {server_url}")
+    print(f" Target PC Receiver: {server_url}")
     print("=" * 60)
 
     # Test receiver connection
     print(f"[*] Testing connection to PC receiver at {server_url}...")
-    test_res = subprocess.run(["curl", "-s", "-m", "5", f"{server_url}/ping"], stdout=subprocess.PIPE, text=True)
+    test_res = subprocess.run(["curl", "-s", "-m", "10", f"{server_url}/ping"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if "PONG" not in test_res.stdout:
         print(f"[!] Warning: Could not reach PC receiver at {server_url}.")
-        print("    Ensure START_RECEIVER.bat is running on your PC with SSH tunnel connected.")
+        print(f"    Check that receiver.py is running on your PC.")
     else:
         print("[✓] Connected to PC receiver!")
 
     blender_bin = find_blender()
-    print(f"[✓] Using Blender executable: {blender_bin}")
+    print(f"[✓] Using Blender: {blender_bin}")
 
     blend_file = find_blend_file(args.blend)
     print(f"[✓] Scene: {blend_file}")
@@ -147,7 +152,6 @@ def main():
 
     gpu_script = Path(__file__).parent / "enable_gpu.py"
     if not gpu_script.exists():
-        # Fallback inline creation
         gpu_script = Path("/workspace/enable_gpu.py")
         gpu_script.write_text("""
 import bpy
@@ -169,7 +173,6 @@ except Exception as e:
     print(e)
 """)
 
-    # Frame flags
     frame_args = []
     if args.single is not None:
         frame_args = ["-f", str(args.single)]
@@ -178,13 +181,15 @@ except Exception as e:
     else:
         frame_args = ["-a"]
 
-    # Start background frame uploader thread
+    # Start background uploader monitoring both render_output and /tmp
     stop_event = threading.Event()
-    uploader_thread = threading.Thread(target=frame_uploader_daemon, args=(output_dir, server_url, stop_event), daemon=True)
+    watch_dirs = [output_dir, Path("/tmp")]
+    uploader_thread = threading.Thread(target=frame_uploader_daemon, args=(watch_dirs, server_url, stop_event), daemon=True)
     uploader_thread.start()
 
     print("\n" + "=" * 60)
-    print(" 🔥 RENDERING FRAMES (GPU ACCELERATED)...")
+    print(" 🔥 RENDERING IN PROGRESS (GPU OPTIX/CUDA)...")
+    print(f" Output folder: {output_dir}")
     print("=" * 60)
     notify_pc_status(server_url, f"Rendering started for {Path(blend_file).name}")
 
@@ -195,18 +200,24 @@ except Exception as e:
         "-o", f"{str(output_dir)}/frame_#####",
     ] + frame_args
 
-    print("Running:", " ".join(render_cmd))
-    proc = subprocess.run(render_cmd)
-
-    # Let uploader finish remaining frames
-    time.sleep(2)
-    stop_event.set()
-    uploader_thread.join(timeout=10)
-
-    notify_pc_status(server_url, f"COMPLETED {Path(blend_file).name}")
-    print("\n" + "=" * 60)
-    print(" [✓] RENDER COMPLETED! ALL FRAMES SENT TO YOUR PC.")
-    print("=" * 60)
+    print("Executing:", " ".join(render_cmd))
+    try:
+        proc = subprocess.run(render_cmd)
+        if proc.returncode != 0:
+            print(f"\n[!] Blender process exited with code {proc.returncode}")
+        else:
+            print("\n[✓] Blender finished rendering successfully!")
+    except KeyboardInterrupt:
+        print("\n[!] Render interrupted by user.")
+    finally:
+        # Give remaining frames time to upload
+        time.sleep(2)
+        stop_event.set()
+        uploader_thread.join(timeout=15)
+        notify_pc_status(server_url, f"Done with {Path(blend_file).name}")
+        print("\n" + "=" * 60)
+        print(" [✓] JOB FINISHED.")
+        print("=" * 60)
 
 if __name__ == "__main__":
     main()

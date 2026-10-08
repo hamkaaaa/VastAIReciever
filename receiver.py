@@ -2,7 +2,7 @@
 """
 PC Receiver for Vast.ai Blender Renders
 Compatible with Python 3.8 through Python 3.14+.
-Automatically creates a zero-config secure tunnel so Vast.ai can connect to your PC without SSH keys.
+Uses Cloudflare Tunnel for high-speed, reliable, unrestricted frame delivery to your PC.
 """
 
 import os
@@ -17,7 +17,8 @@ import urllib.parse
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-OUTPUT_DIR = Path(__file__).parent / "renders"
+BASE_DIR = Path(__file__).parent
+OUTPUT_DIR = BASE_DIR / "renders"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 first_frame_received = False
@@ -81,7 +82,7 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
 
             total_frames += 1
             size_kb = target_path.stat().st_size / 1024
-            print(f"[✓ Frame #{total_frames}] {filename} ({size_kb:.1f} KB) -> Saved to renders/")
+            print(f"[✓ FRAME RECEIVED] {filename} ({size_kb:.1f} KB) saved to renders/ (Total: {total_frames})")
 
             if not first_frame_received:
                 first_frame_received = True
@@ -98,19 +99,14 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-def start_auto_tunnel():
-    """
-    Spawns localhost.run reverse tunnel via native Windows ssh.
-    Requires NO signup, NO software installation, NO keys.
-    """
-    print("[*] Generating instant secure tunnel for Vast.ai...")
-    cmd = [
-        "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-R", "80:localhost:8888",
-        "nokey@localhost.run"
-    ]
+def start_cloudflare_tunnel():
+    """Starts Cloudflare Tunnel using local cloudflared.exe"""
+    cloudflared_bin = BASE_DIR / "cloudflared.exe"
+    if not cloudflared_bin.exists():
+        cloudflared_bin = "cloudflared"
+
+    print("[*] Starting high-speed Cloudflare Tunnel...")
+    cmd = [str(cloudflared_bin), "tunnel", "--url", "http://localhost:8888"]
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -122,20 +118,19 @@ def start_auto_tunnel():
     tunnel_url = None
     start_time = time.time()
 
-    # Read output until URL is found
     for line in iter(proc.stdout.readline, ''):
-        match = re.search(r'(https://[a-zA-Z0-9\-\.]+\.lhr\.life)', line)
+        match = re.search(r'(https://[a-zA-Z0-9\-\.]+\.trycloudflare\.com)', line)
         if match:
             tunnel_url = match.group(1)
             break
-        if time.time() - start_time > 15:
+        if time.time() - start_time > 20:
             break
 
     return proc, tunnel_url
 
 def main():
     print("=" * 70)
-    print(" 📡 VAST.AI PC RENDER RECEIVER")
+    print(" 📡 VAST.AI PC RENDER RECEIVER (CLOUDFLARE ACCELERATED)")
     print(f" Saves renders to: {OUTPUT_DIR.resolve()}")
     print("=" * 70)
 
@@ -145,20 +140,20 @@ def main():
     server_thread.start()
     print("[✓] Local receiver active on port 8888")
 
-    # Start instant tunnel
-    tunnel_proc, tunnel_url = start_auto_tunnel()
+    # Start Cloudflare tunnel
+    tunnel_proc, tunnel_url = start_cloudflare_tunnel()
 
     if not tunnel_url:
-        print("[!] Tunnel did not respond with a domain within 15s.")
-        print("    You can still use local URL if on same network or port-forwarded: http://localhost:8888")
-        tunnel_url = "http://localhost:8888"
+        print("[!] Tunnel setup timed out. Please ensure internet access.")
+        sys.exit(1)
 
     print("\n" + "=" * 70)
     print(" 🎯 COPY & RUN THIS ONE LINE IN YOUR JUPYTER TERMINAL:")
     print("=" * 70)
     print(f"\ncurl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- --server {tunnel_url}\n")
     print("=" * 70)
-    print("[*] Waiting for Vast.ai to start rendering... (Press Ctrl+C to stop)\n")
+    print("[*] Receiver listening! Renders will stream directly to your PC...")
+    print("[*] (Do not close this window)\n")
 
     try:
         while True:

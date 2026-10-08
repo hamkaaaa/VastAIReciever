@@ -851,9 +851,15 @@
         const btnStart = document.getElementById('btnStartInstance');
         const rateTxt = document.getElementById('hourlyRateText');
 
+        if (data.error) {
+          txt.innerText = 'NO API KEY';
+          return;
+        }
+
+        const status = (data.actual_status || data.cur_state || data.intended_status || '').toLowerCase();
         const isRunning = data.actual_status === 'running';
-        const isStopped = data.actual_status === 'stopped' || data.actual_status === 'exited' || data.actual_status === 'inactive';
-        const isTransitioning = data.actual_status === 'loading' || data.actual_status === 'starting';
+        const isTransitioning = (data.cur_state === 'running' && data.actual_status !== 'running') || data.actual_status === 'loading' || data.actual_status === 'starting';
+        const isStopped = !isRunning && !isTransitioning;
 
         if (isRunning) {
           badge.className = 'status-indicator status-running';
@@ -862,22 +868,16 @@
           btnStart.style.display = 'none';
           btnStart.innerText = '▶ Start Instance';
           btnStart.disabled = false;
-        } else if (isStopped) {
-          badge.className = 'status-indicator status-stopped';
-          txt.innerText = 'STOPPED (SAVING CREDITS)';
-          btnStop.style.display = 'none';
-          btnStart.style.display = 'inline-flex';
-          btnStart.innerText = '▶ Start Instance';
-          btnStart.disabled = false;
         } else if (isTransitioning) {
           badge.className = 'status-indicator status-stopped';
-          txt.innerText = 'STARTING... (WAITING FOR GPU)';
+          txt.innerText = 'STARTING... (BOOTING GPU)';
           btnStop.style.display = 'none';
           btnStart.style.display = 'inline-flex';
           btnStart.innerText = '⏳ Starting...';
           btnStart.disabled = true;
         } else {
-          txt.innerText = data.actual_status ? data.actual_status.toUpperCase() : 'STOPPED';
+          badge.className = 'status-indicator status-stopped';
+          txt.innerText = 'STOPPED (SAVING CREDITS)';
           btnStop.style.display = 'none';
           btnStart.style.display = 'inline-flex';
           btnStart.innerText = '▶ Start Instance';

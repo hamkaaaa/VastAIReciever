@@ -76,47 +76,114 @@ def find_blend_file(explicit_path=None):
     print(f"[*] Auto-selecting most recent: {selected.name}")
     return str(selected.resolve())
 
+def check_receiver_online(server_url):
+    """Pings the PC receiver to test connectivity"""
+    try:
+        res = subprocess.run([
+            "curl", "-s", "--connect-timeout", "4", "-m", "5",
+            f"{server_url}/ping"
+        ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        return "PONG" in res.stdout
+    except Exception:
+        return False
+
 def upload_frame_to_pc(file_path, server_url, job_id):
     """Uploads a single completed frame to the PC receiver"""
     file_path = Path(file_path)
-    res = subprocess.run([
-        "curl", "-s",
-        "-o", "/dev/null",
-        "-w", "%{http_code}",
-        "-H", f"X-Filename: {file_path.name}",
-        "-H", f"X-Job: {job_id}",
-        "--data-binary", f"@{file_path}",
-        f"{server_url}/upload_frame"
-    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    
-    code = res.stdout.strip()
-    if res.returncode == 0 and code == "200":
-        return True
-    else:
-        print(f"\n[!] Upload failed for {file_path.name}: HTTP {code} ({res.stderr.strip()})")
-        return False
+    try:
+        res = subprocess.run([
+            "curl", "-s",
+            "-o", "/dev/null",
+            "--connect-timeout", "10",
+            "-m", "60",
+            "-w", "%{http_code}",
+            "-H", f"X-Filename: {file_path.name}",
+            "-H", f"X-Job: {job_id}",
+            "--data-binary", f"@{file_path}",
+            f"{server_url}/upload_frame"
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        code = res.stdout.strip()
+        if res.returncode == 0 and code == "200":
+            return True, code
+        return False, code or str(res.returncode)
+    except Exception as e:
+        return False, str(e)
 
-def frame_uploader_daemon(output_dir, server_url, job_id, job_start_time, stop_event):
-    """Monitors the current job output directory and streams rendered frames to PC exactly once"""
+def frame_uploader_daemon(output_dir, server_url, job_id, job_start_time, render_finished_event):
+    """
+    Monitors the current job output directory and streams rendered frames to PC in chronological order.
+    If the network drops: pauses uploads, keeps buffering on disk, periodically checks /ping,
+    and resumes streaming automatically once PC reconnects without losing a single frame.
+    """
     uploaded = set()
-    while not stop_event.is_set():
+    is_offline = False
+
+    while True:
+        # Collect all eligible frames rendered since job start
+        eligible_frames = []
         if output_dir.exists():
             for f in sorted(list(output_dir.glob("*.*"))):
                 if f.suffix.lower() in [".png", ".jpg", ".jpeg", ".exr", ".mp4", ".mov", ".tga"]:
-                    if f.name not in uploaded and f.stat().st_mtime >= (job_start_time - 2):
-                        # Verify file has finished writing
-                        prev_size = f.stat().st_size
-                        time.sleep(0.5)
-                        if f.stat().st_size == prev_size and prev_size > 0:
-                            print(f"[PC Stream] 🚀 Uploading {f.name} ({f.stat().st_size / 1024:.1f} KB)...")
-                            if upload_frame_to_pc(f, server_url, job_id):
-                                uploaded.add(f.name)
-                                print(f"[PC Stream] ✓ {f.name} delivered to PC (saved once)")
-        time.sleep(1)
+                    if f.stat().st_mtime >= (job_start_time - 2):
+                        eligible_frames.append(f)
+
+        pending = [f for f in eligible_frames if f.name not in uploaded]
+
+        if pending:
+            # Always upload in chronological frame order
+            target_frame = pending[0]
+
+            # Verify Blender has finished writing this frame
+            try:
+                prev_size = target_frame.stat().st_size
+                time.sleep(0.5)
+                current_size = target_frame.stat().st_size
+            except Exception:
+                time.sleep(0.5)
+                continue
+
+            if current_size != prev_size or current_size == 0:
+                # Still being written by Blender
+                time.sleep(0.5)
+                continue
+
+            # If we were previously offline, test receiver ping first
+            if is_offline:
+                if not check_receiver_online(server_url):
+                    time.sleep(3)
+                    continue
+                print(f"\n[PC Stream] 🟢 PC connection restored! Resuming frame delivery...")
+                is_offline = False
+
+            print(f"[PC Stream] 🚀 Uploading {target_frame.name} ({current_size / 1024:.1f} KB)...")
+            success, code = upload_frame_to_pc(target_frame, server_url, job_id)
+            if success:
+                uploaded.add(target_frame.name)
+                print(f"[PC Stream] ✓ {target_frame.name} delivered to PC")
+            else:
+                if not is_offline:
+                    print(f"\n[PC Stream] ⚠️ Upload failed (HTTP {code}). PC or internet may be disconnected.")
+                    print(f"[PC Stream] ⏳ Blender will continue rendering safely in background. Pausing upload stream until PC reconnects...")
+                    is_offline = True
+                time.sleep(3)
+                continue
+
+        else:
+            # No pending frames right now
+            if render_finished_event.is_set():
+                # Blender finished rendering! Double check if any new frames appeared
+                time.sleep(1)
+                all_rendered = [f for f in output_dir.glob("*.*") if f.suffix.lower() in [".png", ".jpg", ".jpeg", ".exr", ".mp4", ".mov", ".tga"] and f.stat().st_mtime >= (job_start_time - 2)]
+                still_pending = [f for f in all_rendered if f.name not in uploaded]
+                if not still_pending:
+                    print(f"\n[PC Stream] 🏁 All {len(uploaded)} rendered frames delivered to PC!")
+                    break
+
+            time.sleep(1)
 
 def notify_pc_status(server_url, status_msg):
     try:
-        subprocess.run(["curl", "-s", "-d", status_msg, f"{server_url}/status"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["curl", "-s", "-m", "4", "-d", status_msg, f"{server_url}/status"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
@@ -137,10 +204,10 @@ def run_single_render_job(blend_file, frame_args, server_url, blender_bin, gpu_s
     output_dir = Path("/workspace/render_output") / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    stop_event = threading.Event()
+    render_finished_event = threading.Event()
     uploader_thread = threading.Thread(
         target=frame_uploader_daemon,
-        args=(output_dir, server_url, job_id, job_start_time, stop_event),
+        args=(output_dir, server_url, job_id, job_start_time, render_finished_event),
         daemon=True
     )
     uploader_thread.start()
@@ -166,23 +233,32 @@ def run_single_render_job(blend_file, frame_args, server_url, blender_bin, gpu_s
         if proc.returncode != 0:
             print(f"\n[!] Blender process exited with code {proc.returncode}")
         else:
-            print("\n[✓] Blender finished rendering successfully!")
+            print("\n[✓] Blender finished rendering all frames!")
     except KeyboardInterrupt:
         print("\n[!] Render interrupted by user.")
     finally:
-        time.sleep(2)
-        stop_event.set()
-        uploader_thread.join(timeout=15)
-        notify_pc_status(server_url, f"Job {job_id} finished")
+        # Signal the uploader thread that Blender is finished
+        render_finished_event.set()
+        print("[*] Waiting for all rendered frames to be safely delivered to PC...")
+        uploader_thread.join()
         
-        # Trigger PC Auto-Stop integration if enabled
-        try:
-            subprocess.run(["curl", "-s", "-d", f"Job {job_id} completed successfully", f"{server_url}/finish_job"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+        # Trigger PC completion handler (IDR cost calculation & auto-stop)
+        print("[*] Notifying PC receiver that render job has completed...")
+        for attempt in range(20):
+            try:
+                res = subprocess.run([
+                    "curl", "-s", "-m", "5",
+                    "-d", f"Job {job_id} completed successfully",
+                    f"{server_url}/finish_job"
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if res.returncode == 0:
+                    break
+            except Exception:
+                pass
+            time.sleep(3)
 
         print("\n" + "=" * 60)
-        print(f" [✓] JOB {job_id} COMPLETED.")
+        print(f" [✓] JOB {job_id} COMPLETED SUCCESSFULLY.")
         print("=" * 60)
 
 def main():

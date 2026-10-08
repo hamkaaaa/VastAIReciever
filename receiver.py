@@ -16,7 +16,18 @@ import subprocess
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+class ThreadedReceiverServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        # Silently absorb socket disconnections from client/tunnel
+        exc_type, _, _ = sys.exc_info()
+        if exc_type in (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError, OSError):
+            return
+        super().handle_error(request, client_address)
 
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "renders"
@@ -284,6 +295,15 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
                     f.write(chunk)
                     bytes_left -= len(chunk)
 
+            # If transfer was cut short by internet disconnect, discard truncated file
+            if bytes_left > 0:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                print(f"[!] Warning: {filename} transfer interrupted by network drop. Waiting for auto-retry...")
+                return
+
             try:
                 if target_path.exists():
                     try:
@@ -303,13 +323,23 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
             timestamp_str = time.strftime("%H:%M:%S")
             print(f"[{timestamp_str}] ✓ [{total_frames_received:03d}] {job_name}/{filename} ({size_kb:.1f} KB) -> Saved")
 
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
+            try:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
+                pass
             return
 
         self.send_response(404)
         self.end_headers()
+
+def drain_pipe(pipe):
+    try:
+        for _ in iter(pipe.readline, ''):
+            pass
+    except Exception:
+        pass
 
 def start_cloudflare_tunnel():
     global current_tunnel_url
@@ -336,6 +366,9 @@ def start_cloudflare_tunnel():
             break
         if time.time() - start_time > 20:
             break
+
+    # Drain remaining output in background so cloudflared stdout buffer never blocks on Windows
+    threading.Thread(target=drain_pipe, args=(proc.stdout,), daemon=True).start()
 
     current_tunnel_url = tunnel_url or ""
     return proc, tunnel_url
@@ -405,7 +438,7 @@ def main():
 
     # 3. Start local receiver & Cloudflare tunnel
     print("\n[*] Starting local receiver on port 8888...")
-    server = HTTPServer(("0.0.0.0", 8888), RenderReceiverHandler)
+    server = ThreadedReceiverServer(("0.0.0.0", 8888), RenderReceiverHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
 

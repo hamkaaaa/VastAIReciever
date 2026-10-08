@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
 PC Receiver for Vast.ai Blender Renders
+Compatible with Python 3.8 through Python 3.14+ (No deprecated modules).
 Listens on port 8888, connects reverse tunnel to Vast.ai, and receives frames in real-time.
 """
 
 import os
 import sys
 import re
-import cgi
 import time
 import shutil
 import argparse
 import threading
 import subprocess
+import urllib.parse
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -27,7 +28,8 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path == "/ping":
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/ping":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
@@ -41,55 +43,57 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global first_frame_received
-        if self.path == "/status":
+        parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path == "/status":
             length = int(self.headers.get('Content-Length', 0))
             msg = self.rfile.read(length).decode('utf-8', errors='ignore')
             print(f"\n[Vast.ai Status] {msg}")
             self.send_response(200)
             self.end_headers()
+            self.wfile.write(b"OK")
             return
 
-        elif self.path == "/upload_frame":
-            content_type = self.headers.get('Content-Type')
-            if not content_type or 'multipart/form-data' not in content_type:
-                self.send_response(400)
-                self.end_headers()
-                return
+        elif parsed.path == "/upload_frame":
+            content_length = int(self.headers.get('Content-Length', 0))
+            
+            # Filename can be passed in header or query parameter
+            filename = self.headers.get('X-Filename')
+            if not filename:
+                query_params = urllib.parse.parse_qs(parsed.query)
+                filename = query_params.get('filename', [None])[0]
+            if not filename:
+                filename = f"frame_{int(time.time()*1000)}.png"
 
-            form = cgi.FieldStorage(
-                fp=self.rfile,
-                headers=self.headers,
-                environ={
-                    'REQUEST_METHOD': 'POST',
-                    'CONTENT_TYPE': self.headers['Content-Type'],
-                }
-            )
-
-            file_item = form['file']
-            filename = form.getvalue('filename', 'frame.png')
-            # Sanitize filename
             filename = os.path.basename(filename)
+            target_path = OUTPUT_DIR / filename
 
-            if file_item.file:
-                target_path = OUTPUT_DIR / filename
-                with open(target_path, 'wb') as f:
-                    shutil.copyfileobj(file_item.file, f)
+            # Stream binary body directly to disk
+            bytes_left = content_length
+            chunk_size = 65536
+            with open(target_path, "wb") as f:
+                while bytes_left > 0:
+                    read_amount = min(chunk_size, bytes_left)
+                    chunk = self.rfile.read(read_amount)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    bytes_left -= len(chunk)
 
-                size_kb = target_path.stat().st_size / 1024
-                print(f"[✓ Received Frame] {filename} ({size_kb:.1f} KB) -> Saved")
+            size_kb = target_path.stat().st_size / 1024
+            print(f"[✓ Received Frame] {filename} ({size_kb:.1f} KB) -> Saved")
 
-                if not first_frame_received:
-                    first_frame_received = True
-                    # Open Explorer once
-                    try:
-                        os.system(f'explorer "{OUTPUT_DIR.resolve()}"')
-                    except Exception:
-                        pass
+            if not first_frame_received:
+                first_frame_received = True
+                try:
+                    os.system(f'explorer "{OUTPUT_DIR.resolve()}"')
+                except Exception:
+                    pass
 
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"OK")
-                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+            return
 
         self.send_response(404)
         self.end_headers()

@@ -80,10 +80,10 @@ def find_blend_file(explicit_path=None):
 def upload_frame_to_pc(file_path, server_url):
     """Uploads a single completed frame to the PC receiver"""
     file_path = Path(file_path)
-    # Use curl if available for high-speed multipart streaming
     ret = subprocess.run([
-        "curl", "-s", "-F", f"file=@{file_path}",
-        "-F", f"filename={file_path.name}",
+        "curl", "-s",
+        "-H", f"X-Filename: {file_path.name}",
+        "--data-binary", f"@{file_path}",
         f"{server_url}/upload_frame"
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return ret.returncode == 0

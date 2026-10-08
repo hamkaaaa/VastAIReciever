@@ -110,7 +110,12 @@ def call_vast_api(endpoint, method="GET", data=None):
     if not api_key:
         return {"error": "No Vast.ai API key configured"}
 
-    url = f"https://console.vast.ai/api/v0/{endpoint.lstrip('/')}"
+    clean_endpoint = endpoint.lstrip('/')
+    if clean_endpoint.startswith("v1/"):
+        url = f"https://console.vast.ai/api/{clean_endpoint}"
+    else:
+        url = f"https://console.vast.ai/api/v0/{clean_endpoint}"
+
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {api_key}"
@@ -130,15 +135,46 @@ def call_vast_api(endpoint, method="GET", data=None):
     except Exception as e:
         return {"error": str(e)}
 
+def get_all_user_instances():
+    """Fetches all instances belonging to user's account via /api/v1/instances/"""
+    res = call_vast_api("v1/instances/")
+    if isinstance(res, dict) and "instances" in res:
+        return res["instances"] or []
+    return []
+
 def get_instance_info():
     cfg = load_config()
-    inst_id = cfg.get("instance_id")
-    if not inst_id or not cfg.get("api_key"):
+    api_key = cfg.get("api_key")
+    if not api_key:
         return None
-    res = call_vast_api(f"instances/{inst_id}/")
-    if "instances" in res:
-        return res["instances"]
-    return res if "actual_status" in res else None
+
+    inst_id = cfg.get("instance_id")
+    # 1. Try checking the configured instance_id
+    if inst_id:
+        res = call_vast_api(f"instances/{inst_id}/")
+        info = None
+        if isinstance(res, dict):
+            if isinstance(res.get("instances"), dict):
+                info = res["instances"]
+            elif "actual_status" in res:
+                info = res
+        if info and info.get("actual_status"):
+            return info
+
+    # 2. Auto-discover active instances from the user's account
+    all_instances = get_all_user_instances()
+    if all_instances:
+        running_inst = [i for i in all_instances if str(i.get("actual_status", "")).lower() == "running"]
+        chosen = running_inst[0] if running_inst else all_instances[0]
+        chosen_id = str(chosen["id"])
+        gpu_name = chosen.get("gpu_name", "GPU")
+        status_name = chosen.get("actual_status", "").upper()
+        print(f"[+] 🔍 Terdeteksi instance aktif di akun Vast.ai: #{chosen_id} ({gpu_name} - 🟢 {status_name})")
+        cfg["instance_id"] = chosen_id
+        save_config(cfg)
+        return chosen
+
+    return None
 
 def stop_instance_api():
     cfg = load_config()

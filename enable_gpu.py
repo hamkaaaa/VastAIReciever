@@ -1,13 +1,28 @@
 import bpy
 import sys
 
-def setup_cycles_gpu():
+def setup_blender_optimizations():
     try:
         scene = bpy.context.scene
         scene.render.engine = 'CYCLES'
-        cprefs = bpy.context.preferences.addons['cycles'].preferences
 
-        print("\n[Blender Setup] Configuring GPU acceleration...")
+        # 1. Enable Auto-Run Python Scripts (drivers, rigged characters, procedural scripts)
+        try:
+            bpy.context.preferences.filepaths.use_scripts_auto_execute = True
+            print("[Blender Setup] ✓ Automatically run Python scripts enabled.")
+        except Exception as e:
+            print(f"[Blender Setup] Notice: Could not set use_scripts_auto_execute: {e}")
+
+        # 2. Enable Persistent Data (keeps BVH/textures/geometry in memory between frames)
+        try:
+            scene.render.use_persistent_data = True
+            print("[Blender Setup] ✓ Persistent Data enabled (drastically accelerates multi-frame renders).")
+        except Exception as e:
+            print(f"[Blender Setup] Notice: Could not set use_persistent_data: {e}")
+
+        # 3. GPU Hardware Acceleration (OptiX / CUDA)
+        cprefs = bpy.context.preferences.addons['cycles'].preferences
+        print("[Blender Setup] Configuring GPU acceleration...")
         
         # Priority order: OPTIX (fastest on RTX), CUDA
         activated_devices = []
@@ -26,9 +41,9 @@ def setup_cycles_gpu():
                 
                 if found:
                     scene.cycles.device = 'GPU'
-                    print(f"[Blender Setup] Successfully enabled compute type: {dev_type}")
+                    print(f"[Blender Setup] ✓ Enabled compute type: {dev_type}")
                     for d in activated_devices:
-                        print(f"  -> Enabled: {d}")
+                        print(f"  -> {d}")
                     return True
             except Exception as e:
                 print(f"[Blender Setup] Could not configure {dev_type}: {e}")
@@ -37,7 +52,7 @@ def setup_cycles_gpu():
         scene.cycles.device = 'CPU'
         return False
     except Exception as e:
-        print(f"[Blender Setup] Error setting up Cycles GPU: {e}")
+        print(f"[Blender Setup] Error during Blender setup: {e}")
         return False
 
-setup_cycles_gpu()
+setup_blender_optimizations()

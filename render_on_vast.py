@@ -16,6 +16,8 @@ GPU_SETUP_SCRIPT = """
 import bpy
 try:
     bpy.context.scene.render.engine = 'CYCLES'
+    bpy.context.preferences.filepaths.use_scripts_auto_execute = True
+    bpy.context.scene.render.use_persistent_data = True
     cprefs = bpy.context.preferences.addons['cycles'].preferences
     # Try OptiX first, fallback to CUDA
     for dev_type in ('OPTIX', 'CUDA'):
@@ -218,7 +220,7 @@ def main():
     print("=" * 60)
     
     render_cmd = (
-        f"{remote_blender} -b /workspace/render_job/scene.blend "
+        f"{remote_blender} -y -b /workspace/render_job/scene.blend "
         f"-P /workspace/render_job/gpu_setup.py "
         f"-o /workspace/render_job/output/frame_##### "
         f"{frame_args}"

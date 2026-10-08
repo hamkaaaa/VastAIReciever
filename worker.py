@@ -164,6 +164,8 @@ def main():
 import bpy
 try:
     bpy.context.scene.render.engine = 'CYCLES'
+    bpy.context.preferences.filepaths.use_scripts_auto_execute = True
+    bpy.context.scene.render.use_persistent_data = True
     cprefs = bpy.context.preferences.addons['cycles'].preferences
     for dev in ('OPTIX', 'CUDA'):
         try:
@@ -206,6 +208,7 @@ except Exception as e:
 
     render_cmd = [
         blender_bin,
+        "-y", # Enable automatic Python script execution
         "-b", blend_file,
         "-P", str(gpu_script.resolve()),
         "-o", f"{str(output_dir)}/frame_#####",

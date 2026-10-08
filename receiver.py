@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 PC Receiver for Vast.ai Blender Renders
-Compatible with Python 3.8 through Python 3.14+ (No deprecated modules).
-Listens on port 8888, connects reverse tunnel to Vast.ai, and receives frames in real-time.
+Compatible with Python 3.8 through Python 3.14+.
+Automatically creates a zero-config secure tunnel so Vast.ai can connect to your PC without SSH keys.
 """
 
 import os
@@ -21,10 +21,10 @@ OUTPUT_DIR = Path(__file__).parent / "renders"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 first_frame_received = False
+total_frames = 0
 
 class RenderReceiverHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        # Suppress routine access logs for cleaner output
         pass
 
     def do_GET(self):
@@ -42,7 +42,7 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"PC Receiver Online\n")
 
     def do_POST(self):
-        global first_frame_received
+        global first_frame_received, total_frames
         parsed = urllib.parse.urlparse(self.path)
 
         if parsed.path == "/status":
@@ -57,7 +57,6 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/upload_frame":
             content_length = int(self.headers.get('Content-Length', 0))
             
-            # Filename can be passed in header or query parameter
             filename = self.headers.get('X-Filename')
             if not filename:
                 query_params = urllib.parse.parse_qs(parsed.query)
@@ -80,8 +79,9 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
                     f.write(chunk)
                     bytes_left -= len(chunk)
 
+            total_frames += 1
             size_kb = target_path.stat().st_size / 1024
-            print(f"[✓ Received Frame] {filename} ({size_kb:.1f} KB) -> Saved")
+            print(f"[✓ Frame #{total_frames}] {filename} ({size_kb:.1f} KB) -> Saved to renders/")
 
             if not first_frame_received:
                 first_frame_received = True
@@ -98,79 +98,67 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-def parse_ssh_string(ssh_str):
-    ssh_str = ssh_str.strip()
-    if ssh_str.startswith("ssh "):
-        ssh_str = ssh_str[4:].strip()
+def start_auto_tunnel():
+    """
+    Spawns localhost.run reverse tunnel via native Windows ssh.
+    Requires NO signup, NO software installation, NO keys.
+    """
+    print("[*] Generating instant secure tunnel for Vast.ai...")
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-R", "80:localhost:8888",
+        "nokey@localhost.run"
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
 
-    port = "22"
-    port_match = re.search(r'-p\s+(\d+)', ssh_str)
-    if port_match:
-        port = port_match.group(1)
-        ssh_str = re.sub(r'-p\s+\d+', '', ssh_str)
+    tunnel_url = None
+    start_time = time.time()
 
-    identity = None
-    id_match = re.search(r'-i\s+([^\s]+)', ssh_str)
-    if id_match:
-        identity = id_match.group(1)
-        ssh_str = re.sub(r'-i\s+[^\s]+', '', ssh_str)
+    # Read output until URL is found
+    for line in iter(proc.stdout.readline, ''):
+        match = re.search(r'(https://[a-zA-Z0-9\-\.]+\.lhr\.life)', line)
+        if match:
+            tunnel_url = match.group(1)
+            break
+        if time.time() - start_time > 15:
+            break
 
-    ssh_str = re.sub(r'-[LDR]\s+[^\s]+', '', ssh_str)
-    tokens = [t.strip() for t in ssh_str.split() if t.strip() and not t.startswith('-')]
-    target = tokens[0] if tokens else "root@localhost"
-    return target, port, identity
+    return proc, tunnel_url
 
 def main():
-    print("=" * 60)
+    print("=" * 70)
     print(" 📡 VAST.AI PC RENDER RECEIVER")
-    print(f" Saves incoming renders to: {OUTPUT_DIR.resolve()}")
-    print("=" * 60)
+    print(f" Saves renders to: {OUTPUT_DIR.resolve()}")
+    print("=" * 70)
 
-    cache_file = Path(__file__).parent / ".last_vast_ssh.txt"
-    cached_ssh = cache_file.read_text().strip() if cache_file.exists() else ""
-
-    parser = argparse.ArgumentParser(description="PC Receiver for Vast.ai")
-    parser.add_argument("--ssh", help="Vast.ai SSH command")
-    parser.add_argument("--no-tunnel", action="store_true", help="Don't open SSH tunnel (if using cloudflare or port forward)")
-    args = parser.parse_args()
-
-    # Start local HTTP receiver server
+    # Start local HTTP server on port 8888
     server = HTTPServer(("0.0.0.0", 8888), RenderReceiverHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    print("[+] Local HTTP server listening on port 8888")
+    print("[✓] Local receiver active on port 8888")
 
-    tunnel_proc = None
-    if not args.no_tunnel:
-        ssh_raw = args.ssh
-        if not ssh_raw:
-            prompt_txt = f"Paste Vast.ai SSH command [{cached_ssh}]: " if cached_ssh else "Paste Vast.ai SSH command (from Vast.ai Connect button): "
-            ssh_input = input(prompt_txt).strip()
-            ssh_raw = ssh_input if ssh_input else cached_ssh
+    # Start instant tunnel
+    tunnel_proc, tunnel_url = start_auto_tunnel()
 
-        if ssh_raw:
-            cache_file.write_text(ssh_raw)
-            target, port, identity = parse_ssh_string(ssh_raw)
-            print(f"[+] Setting up secure reverse tunnel to {target}:{port}...")
+    if not tunnel_url:
+        print("[!] Tunnel did not respond with a domain within 15s.")
+        print("    You can still use local URL if on same network or port-forwarded: http://localhost:8888")
+        tunnel_url = "http://localhost:8888"
 
-            tunnel_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-N", "-R", "8888:localhost:8888", "-p", str(port)]
-            if identity:
-                tunnel_cmd.extend(["-i", identity])
-            tunnel_cmd.append(target)
-
-            tunnel_proc = subprocess.Popen(tunnel_cmd)
-            time.sleep(2)
-            if tunnel_proc.poll() is not None:
-                print("[!] Warning: SSH reverse tunnel exited. Check SSH credentials or port.")
-            else:
-                print("[✓] Reverse tunnel active!")
-
-    print("\n" + "=" * 60)
-    print(" 🎯 ONE COMMAND TO RUN IN VAST.AI JUPYTER TERMINAL:")
-    print("=" * 60)
-    print("\n   curl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash\n")
-    print("=" * 60)
-    print("[*] Waiting for renders... (Press Ctrl+C to stop)")
+    print("\n" + "=" * 70)
+    print(" 🎯 COPY & RUN THIS ONE LINE IN YOUR JUPYTER TERMINAL:")
+    print("=" * 70)
+    print(f"\ncurl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- --server {tunnel_url}\n")
+    print("=" * 70)
+    print("[*] Waiting for Vast.ai to start rendering... (Press Ctrl+C to stop)\n")
 
     try:
         while True:

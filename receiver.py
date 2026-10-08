@@ -57,21 +57,25 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
 
         elif parsed.path == "/upload_frame":
             content_length = int(self.headers.get('Content-Length', 0))
-            
-            filename = self.headers.get('X-Filename')
-            if not filename:
+            raw_filename = self.headers.get('X-Filename', '')
+            if raw_filename:
+                filename = re.sub(r'[\r\n\t\x00]', '', raw_filename).strip().strip('"\'')
+            else:
                 query_params = urllib.parse.parse_qs(parsed.query)
-                filename = query_params.get('filename', [None])[0]
+                filename = query_params.get('filename', [''])[0]
+                filename = re.sub(r'[\r\n\t\x00]', '', filename).strip().strip('"\'')
+            
             if not filename:
                 filename = f"frame_{int(time.time()*1000)}.png"
 
             filename = os.path.basename(filename)
             target_path = OUTPUT_DIR / filename
+            temp_path = OUTPUT_DIR / f".tmp_{filename}"
 
             # Stream binary body directly to disk
             bytes_left = content_length
             chunk_size = 65536
-            with open(target_path, "wb") as f:
+            with open(temp_path, "wb") as f:
                 while bytes_left > 0:
                     read_amount = min(chunk_size, bytes_left)
                     chunk = self.rfile.read(read_amount)
@@ -79,6 +83,21 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
                         break
                     f.write(chunk)
                     bytes_left -= len(chunk)
+
+            # Safe rename on Windows
+            try:
+                if target_path.exists():
+                    try:
+                        target_path.unlink()
+                    except Exception:
+                        pass
+                temp_path.replace(target_path)
+            except Exception:
+                try:
+                    shutil.copy2(temp_path, target_path)
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
             total_frames += 1
             size_kb = target_path.stat().st_size / 1024

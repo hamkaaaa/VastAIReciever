@@ -181,9 +181,9 @@ except Exception as e:
     else:
         frame_args = ["-a"]
 
-    # Start background uploader monitoring both render_output and /tmp
+    # Start background uploader monitoring render_output
     stop_event = threading.Event()
-    watch_dirs = [output_dir, Path("/tmp")]
+    watch_dirs = [output_dir]
     uploader_thread = threading.Thread(target=frame_uploader_daemon, args=(watch_dirs, server_url, stop_event), daemon=True)
     uploader_thread.start()
 

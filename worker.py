@@ -289,18 +289,82 @@ def main():
     blender_bin = find_blender()
     print(f"[✓] Using Blender: {blender_bin}")
 
-    blend_file = find_blend_file(args.blend)
-    print(f"[✓] Scene: {blend_file}")
+    # Fetch configuration sent from PC receiver
+    dash_cfg = fetch_job_config(server_url)
+    if dash_cfg:
+        try:
+            Path("/workspace/render_job_settings.json").write_text(json.dumps(dash_cfg))
+        except Exception:
+            pass
+        print(f"[+] Loaded Configuration from PC: {dash_cfg}")
+
+    blend_file = None
+    if dash_cfg.get("upload_project"):
+        proj_name = dash_cfg.get("project_name", "project.blend")
+        proj_type = dash_cfg.get("project_type", "blend")
+        file_size = dash_cfg.get("file_size", 0)
+        size_mb = file_size / (1024 * 1024) if file_size else 0
+
+        dest_file = Path("/workspace") / proj_name
+        print("\n" + "=" * 60)
+        print(f" 📥 DOWNLOADING PROJECT FROM PC: {proj_name} ({size_mb:.1f} MB)...")
+        print("=" * 60)
+        notify_pc_status(server_url, f"Downloading project {proj_name} from PC...")
+
+        # Remove incomplete download if file size differs
+        if dest_file.exists() and file_size and dest_file.stat().st_size != file_size:
+            try:
+                dest_file.unlink()
+            except Exception:
+                pass
+
+        dl_cmd = [
+            "curl", "-L",
+            "-C", "-",
+            "--retry", "5",
+            "--retry-delay", "2",
+            "--connect-timeout", "15",
+            "-o", str(dest_file),
+            f"{server_url}/download_project"
+        ]
+        subprocess.run(dl_cmd)
+
+        if not dest_file.exists() or dest_file.stat().st_size == 0:
+            print("[!] Download with resume failed. Retrying fresh download...")
+            subprocess.run(["curl", "-L", "-o", str(dest_file), f"{server_url}/download_project"])
+
+        if not dest_file.exists() or dest_file.stat().st_size == 0:
+            print("[!] Fatal: Failed to download project file from PC!")
+            sys.exit(1)
+
+        print(f"[✓] Project downloaded successfully ({dest_file.stat().st_size / (1024*1024):.1f} MB)!")
+
+        if proj_type == "zip" or dest_file.suffix.lower() == ".zip":
+            extract_dir = Path("/workspace/project")
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[📦 Project Unpack] Unpacking {dest_file.name} to {extract_dir}...")
+            if subprocess.run(["which", "unzip"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+                print("[*] Installing unzip...")
+                subprocess.run("apt-get update -qq && apt-get install -y -qq unzip", shell=True)
+            subprocess.run(["unzip", "-o", str(dest_file), "-d", str(extract_dir)])
+            
+            candidates = list(extract_dir.glob("*.blend")) + list(extract_dir.glob("**/*.blend"))
+            if not candidates:
+                print(f"[!] Error: No .blend files found inside {dest_file.name}!")
+                sys.exit(1)
+            candidates.sort(key=lambda p: p.stat().st_size, reverse=True)
+            blend_file = str(candidates[0].resolve())
+            print(f"[✓] Scene .blend found inside zip: {blend_file}")
+        else:
+            blend_file = str(dest_file.resolve())
+            print(f"[✓] Scene .blend ready: {blend_file}")
+    else:
+        blend_file = find_blend_file(args.blend)
+        print(f"[✓] Scene: {blend_file}")
 
     gpu_script = Path(__file__).parent / "enable_gpu.py"
     if not gpu_script.exists():
         gpu_script = Path("/workspace/enable_gpu.py")
-
-    # Fetch configuration sent from PC dashboard
-    dash_cfg = fetch_job_config(server_url)
-    if dash_cfg:
-        Path("/workspace/render_job_settings.json").write_text(json.dumps(dash_cfg))
-        print(f"[+] Loaded Dashboard Settings: {dash_cfg}")
 
     # Determine frame args
     start_val = args.start if args.start is not None else dash_cfg.get("start_frame")

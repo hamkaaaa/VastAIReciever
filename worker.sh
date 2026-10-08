@@ -5,8 +5,8 @@ echo "=========================================================="
 echo " 🚀 VAST.AI BLENDER RENDER RUNNER"
 echo "=========================================================="
 
-# Ensure git and curl are present
-apt-get update -qq && apt-get install -y -qq git curl python3 > /dev/null 2>&1 || true
+# Ensure git, curl, unzip, and python3 are present
+apt-get update -qq && apt-get install -y -qq git curl unzip python3 > /dev/null 2>&1 || true
 
 WORK_DIR="/workspace/VastAIReciever"
 if [ -d "$WORK_DIR/.git" ]; then

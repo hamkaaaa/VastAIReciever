@@ -10,6 +10,7 @@ import re
 import json
 import time
 import shutil
+import zipfile
 import argparse
 import threading
 import subprocess
@@ -39,6 +40,25 @@ active_job_name = ""
 last_activity_time = time.time()
 vast_boot_time = None
 server_running = True
+
+current_project_file = None
+current_project_type = None
+
+def package_folder_to_zip(folder_path):
+    cache_dir = BASE_DIR / ".cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = cache_dir / f"{folder_path.name}.zip"
+    print(f"\n[*] Mengompres folder '{folder_path.name}' menjadi '{zip_path.name}'...")
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(folder_path):
+            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".vscode")]
+            for file in files:
+                file_p = Path(root) / file
+                arcname = file_p.relative_to(folder_path)
+                zipf.write(file_p, arcname)
+    size_mb = zip_path.stat().st_size / (1024 * 1024)
+    print(f"[✓] Kompresi selesai: {zip_path.name} ({size_mb:.1f} MB)")
+    return zip_path
 
 def record_vast_boot_time(ts=None):
     global vast_boot_time
@@ -215,7 +235,7 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        global last_activity_time
+        global last_activity_time, current_project_file, current_project_type
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
@@ -226,9 +246,75 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"PONG")
             return
 
+        elif path == "/download_project":
+            if not current_project_file or not current_project_file.exists():
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"No project file prepared")
+                return
+
+            file_size = current_project_file.stat().st_size
+            filename = current_project_file.name
+
+            range_header = self.headers.get("Range")
+            start_byte = 0
+            end_byte = file_size - 1
+
+            if range_header and range_header.startswith("bytes="):
+                try:
+                    ranges = range_header[6:].split("-")
+                    start_byte = int(ranges[0]) if ranges[0] else 0
+                    if len(ranges) > 1 and ranges[1]:
+                        end_byte = int(ranges[1])
+                except Exception:
+                    pass
+
+            content_length = end_byte - start_byte + 1
+
+            if range_header:
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start_byte}-{end_byte}/{file_size}")
+            else:
+                self.send_response(200)
+
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(content_length))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+
+            print(f"\n[📤 PC Upload] Mengirim {filename} ke Vast.ai ({content_length / (1024*1024):.1f} MB)...")
+            chunk_size = 256 * 1024
+            bytes_sent = 0
+            with open(current_project_file, "rb") as f:
+                f.seek(start_byte)
+                remaining = content_length
+                while remaining > 0:
+                    read_len = min(chunk_size, remaining)
+                    data = f.read(read_len)
+                    if not data:
+                        break
+                    try:
+                        self.wfile.write(data)
+                        remaining -= len(data)
+                        bytes_sent += len(data)
+                    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
+                        print(f"[!] Upload {filename} terputus oleh jaringan.")
+                        return
+
+            print(f"[✓] {filename} berhasil dikirim ke Vast.ai!")
+            return
+
         elif path == "/api/job_config":
             resp = dict(current_job_config)
             resp["tunnel_url"] = current_tunnel_url
+            if current_project_file and current_project_file.exists():
+                resp["upload_project"] = True
+                resp["project_name"] = current_project_file.name
+                resp["project_type"] = current_project_type or ("zip" if current_project_file.suffix.lower() == ".zip" else "blend")
+                resp["file_size"] = current_project_file.stat().st_size
+            else:
+                resp["upload_project"] = False
             self.send_json(resp)
             return
 
@@ -409,21 +495,72 @@ def start_cloudflare_tunnel():
     return proc, tunnel_url
 
 def main():
-    global current_job_config, vast_boot_time
+    global current_job_config, vast_boot_time, current_project_file, current_project_type
     print("=" * 70)
     print(" 🚀 VAST.AI BLENDER RENDER RECEIVER (CLI)")
     print("=" * 70)
 
     cfg = load_config()
 
-    # 1. Check and display instance status
+    # 1. Pilih Proyek Blender
+    print("\n--- 📁 1. PILIH PROYEK BLENDER ---")
+    print("[1] Upload proyek dari PC ini (.blend / .zip / folder proyek)")
+    print("[2] Gunakan proyek yang sudah ada di Vast.ai")
+    
+    proj_choice = input("Pilih sumber proyek [default: 1]: ").strip() or "1"
+    
+    upload_project_needed = False
+    if proj_choice == "1":
+        while True:
+            raw_path = input("\nMasukkan path file (.blend / .zip) atau folder proyek di PC:\n(Tips: Drag & drop file/folder langsung ke terminal ini)\n> ").strip().strip('"\'')
+            if not raw_path:
+                found_blends = list(BASE_DIR.glob("*.blend"))
+                if found_blends:
+                    raw_path = str(found_blends[0])
+                    print(f"[*] Menggunakan file .blend lokal: {raw_path}")
+                else:
+                    print("[!] Path tidak boleh kosong.")
+                    continue
+
+            p = Path(raw_path)
+            if not p.exists():
+                print(f"[!] File atau folder tidak ditemukan: {p}")
+                continue
+
+            if p.is_dir():
+                blends_in_dir = list(p.glob("*.blend")) + list(p.glob("**/*.blend"))
+                if not blends_in_dir:
+                    print(f"[!] Peringatan: Tidak ditemukan file .blend di dalam folder {p.name}!")
+                    confirm = input("Tetap kompres dan kirim folder ini? [y/N]: ").strip().lower()
+                    if confirm != "y":
+                        continue
+                current_project_file = package_folder_to_zip(p)
+                current_project_type = "zip"
+            elif p.suffix.lower() == ".zip":
+                current_project_file = p
+                current_project_type = "zip"
+            elif p.suffix.lower() == ".blend":
+                current_project_file = p
+                current_project_type = "blend"
+            else:
+                print(f"[!] Format '{p.suffix}' tidak didukung. Gunakan .blend, .zip, atau folder.")
+                continue
+
+            size_mb = current_project_file.stat().st_size / (1024 * 1024)
+            print(f"[✓] Proyek siap dikirim: {current_project_file.name} ({size_mb:.1f} MB)")
+            upload_project_needed = True
+            break
+    else:
+        print("[*] Menggunakan file proyek yang sudah tersimpan di Vast.ai.")
+
+    # 2. Check and display instance status
     inst_data = get_instance_info()
     if inst_data:
         status = inst_data.get("actual_status", "unknown").upper()
         gpu_name = inst_data.get("gpu_name", "GPU")
         dph = float(inst_data.get("dph_total", 0.409))
         if status == "RUNNING":
-            print(f"[Vast.ai Status] 🟢 {status} ({gpu_name} | Rate: ${dph:.3f}/hr)")
+            print(f"\n[Vast.ai Status] 🟢 {status} ({gpu_name} | Rate: ${dph:.3f}/hr)")
             if cfg.get("last_boot_time"):
                 vast_boot_time = float(cfg["last_boot_time"])
                 b_str = time.strftime("%H:%M:%S", time.localtime(vast_boot_time))
@@ -431,20 +568,20 @@ def main():
             else:
                 record_vast_boot_time(time.time())
         else:
-            print(f"[Vast.ai Status] ⚪ {status} (Storage Only: $0.009/hr - SAVING CREDITS)")
+            print(f"\n[Vast.ai Status] ⚪ {status} (Storage Only: $0.009/hr - SAVING CREDITS)")
             clear_vast_boot_time()
     else:
-        print("[Vast.ai Status] Connected locally")
+        print("\n[Vast.ai Status] Connected locally")
         if not vast_boot_time:
             record_vast_boot_time(time.time())
 
-    # 2. Interactive Render Configuration
-    print("\n--- ⚙️  Render Configuration ---")
-    print("[1] Render Full Animation (all frames in .blend)")
-    print("[2] Render Specific Frame Range (e.g. 1 to 120)")
-    print("[3] Render Single Test Frame (e.g. 10)")
+    # 3. Interactive Render Configuration
+    print("\n--- ⚙️  2. PENGATURAN RENDER ---")
+    print("[1] Render Full Animation (seluruh frame)")
+    print("[2] Render Rentang Frame Tertentu (contoh: 1 sampai 120)")
+    print("[3] Render 1 Frame Uji Coba (contoh: frame 10)")
     
-    choice = input("Select mode [default: 1]: ").strip() or "1"
+    choice = input("Pilih mode [default: 1]: ").strip() or "1"
     
     start_f = ""
     end_f = ""
@@ -457,14 +594,18 @@ def main():
         single_f = input("Frame number to render [1]: ").strip() or "1"
 
     samples_in = input("Cycles Samples [128]: ").strip() or "128"
-    denoise_in = input("Enable OptiX AI Denoising? [Y/n]: ").strip().lower()
+    denoise_in = input("Aktifkan OptiX AI Denoising? [Y/n]: ").strip().lower()
     denoise_val = denoise_in != "n"
 
-    autostop_in = input("Auto-stop Vast.ai instance when render finishes? [Y/n]: ").strip().lower()
+    autostop_in = input("Otomatis matikan Vast.ai setelah selesai render? [Y/n]: ").strip().lower()
     cfg["auto_stop"] = (autostop_in != "n")
     save_config(cfg)
 
     current_job_config = {
+        "upload_project": upload_project_needed,
+        "project_name": current_project_file.name if current_project_file else "",
+        "project_type": current_project_type or "",
+        "file_size": current_project_file.stat().st_size if current_project_file else 0,
         "start_frame": start_f,
         "end_frame": end_f,
         "single_frame": single_f,

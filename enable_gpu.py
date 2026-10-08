@@ -42,12 +42,31 @@ def setup_blender_optimizations():
                 print(f"[Blender Setup] Could not set samples: {e}")
 
         if job_settings.get("denoise", True):
+            optix_weights = Path("/usr/share/nvidia/nvoptix.bin")
+            has_optix = optix_weights.is_file()
+
+            if not has_optix:
+                try:
+                    for alt_path in Path("/usr").glob("**/nvoptix.bin"):
+                        if alt_path.is_file():
+                            optix_weights.parent.mkdir(parents=True, exist_ok=True)
+                            optix_weights.symlink_to(alt_path)
+                            has_optix = True
+                            print(f"[Blender Setup] Linked OptiX weights from {alt_path}")
+                            break
+                except Exception:
+                    pass
+
             try:
                 scene.cycles.use_denoising = True
-                scene.cycles.denoiser = 'OPTIX'
-                print("[Blender Setup] ✓ OptiX AI Denoising enabled.")
+                if has_optix:
+                    scene.cycles.denoiser = 'OPTIX'
+                    print("[Blender Setup] ✓ OptiX AI Denoising enabled.")
+                else:
+                    scene.cycles.denoiser = 'OPENIMAGEDENOISE'
+                    print("[Blender Setup] ✓ OpenImageDenoise (OIDN) enabled (nvoptix.bin tidak ditemukan di container, menggunakan OIDN agar render lancar tanpa error).")
             except Exception as e:
-                print(f"[Blender Setup] Could not enable OptiX denoiser: {e}")
+                print(f"[Blender Setup] Notice setting denoiser: {e}")
 
         # 4. GPU Hardware Acceleration (OptiX / CUDA)
         cprefs = bpy.context.preferences.addons['cycles'].preferences

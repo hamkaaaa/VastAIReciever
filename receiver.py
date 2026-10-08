@@ -923,7 +923,7 @@ def main():
         single_f = input("Frame number to render [1]: ").strip() or "1"
 
     samples_in = input("Cycles Samples [128]: ").strip() or "128"
-    denoise_in = input("Aktifkan OptiX AI Denoising? [Y/n]: ").strip().lower()
+    denoise_in = input("Aktifkan AI Denoising (OptiX / OpenImageDenoise)? [Y/n]: ").strip().lower()
     denoise_val = denoise_in != "n"
 
     autostop_in = input("Otomatis matikan Vast.ai setelah selesai render? [Y/n]: ").strip().lower()

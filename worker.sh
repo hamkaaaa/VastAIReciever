@@ -9,6 +9,15 @@ echo "=========================================================="
 apt-get update -qq && apt-get install -y -qq git curl unzip xz-utils libgl1 libxi6 libxrender1 libxfixes3 python3 python3-pip > /dev/null 2>&1 || true
 pip install -q gdown > /dev/null 2>&1 || python3 -m pip install -q gdown > /dev/null 2>&1 || true
 
+# Look for nvoptix.bin on system and link if present
+if [ ! -f /usr/share/nvidia/nvoptix.bin ]; then
+    mkdir -p /usr/share/nvidia
+    NVOPTIX_FILE=$(find /usr -name "nvoptix.bin" 2>/dev/null | head -n 1)
+    if [ -n "$NVOPTIX_FILE" ]; then
+        ln -sf "$NVOPTIX_FILE" /usr/share/nvidia/nvoptix.bin
+    fi
+fi
+
 WORK_DIR="/workspace/VastAIReciever"
 if [ -d "$WORK_DIR/.git" ]; then
     echo "[*] Updating VastAIReciever repository..."

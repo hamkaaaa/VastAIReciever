@@ -220,14 +220,15 @@ def ensure_ssh_key_registered():
         pub_key = pub_path.read_text().strip()
         call_vast_api("ssh/", method="POST", data={"ssh_key": pub_key})
 
-def search_available_gpus(gpu_names=("RTX 4090", "RTX 3090", "RTX 5090", "RTX 4080"), max_results=6):
+def search_available_gpus(gpu_names=("RTX 5090", "RTX 4090", "RTX 3090", "RTX 4080"), max_results=12):
     """Searches available, verified, immediately rentable GPUs on Vast.ai"""
     query_payload = {
         "rentable": {"eq": True},
         "verified": {"eq": True},
         "num_gpus": {"eq": 1},
-        "gpu_name": {"in": list(gpu_names)}
     }
+    if gpu_names:
+        query_payload["gpu_name"] = {"in": list(gpu_names)}
     encoded_q = urllib.parse.quote(json.dumps(query_payload))
     res = call_vast_api(f"bundles/?q={encoded_q}")
     if isinstance(res, dict) and "offers" in res:
@@ -236,35 +237,70 @@ def search_available_gpus(gpu_names=("RTX 4090", "RTX 3090", "RTX 5090", "RTX 40
         return offers[:max_results]
     return []
 
+def prompt_gpu_model_selection():
+    """Lets user pick which GPU model(s) to search for on Vast.ai"""
+    print("\n--- 🎮 PILIH TIPE GPU VAST.AI ---")
+    print("[1] Semua GPU Terbaik (RTX 5090 / 4090 / 4080 / 3090 - Campuran Termurah)")
+    print("[2] Khusus NVIDIA RTX 5090 (32 GB VRAM - Tercepat)")
+    print("[3] Khusus NVIDIA RTX 4090 (24 GB VRAM - Sangat Cepat & Populer)")
+    print("[4] Khusus NVIDIA RTX 3090 / 3090 Ti (24 GB VRAM - Hemat Biaya)")
+    print("[5] Khusus NVIDIA RTX 4080 / 4080S / 4070 Ti (16 GB VRAM)")
+    print("[6] Ketik nama GPU manual (contoh: RTX A6000, L40S, H100)")
+
+    g_opt = input("Pilih tipe GPU [Default: 1]: ").strip() or "1"
+    if g_opt == "2":
+        return ("RTX 5090",)
+    elif g_opt == "3":
+        return ("RTX 4090", "RTX 4090D")
+    elif g_opt == "4":
+        return ("RTX 3090", "RTX 3090 Ti")
+    elif g_opt == "5":
+        return ("RTX 4080", "RTX 4080S", "RTX 4070 Ti")
+    elif g_opt == "6":
+        custom_gpu = input("Masukkan nama GPU (pisahkan koma jika lebih dari 1): ").strip()
+        if custom_gpu:
+            return tuple(x.strip() for x in custom_gpu.split(",") if x.strip())
+    return ("RTX 5090", "RTX 4090", "RTX 4080", "RTX 3090")
+
 def display_and_rent_gpu_flow():
     """Displays immediately rentable GPUs, lets user pick or auto-selects, rents it with auto-retry, and updates config"""
-    print("\n" + "=" * 75)
-    print(" 🔍 MENCARI GPU TERBAIK YANG LANGSUNG BISA DISEWA DI VAST.AI...")
-    print("=" * 75)
-    offers = search_available_gpus(max_results=8)
-    if not offers:
-        print("[!] Tidak ada GPU yang cocok ditemukan saat ini.")
-        return None
+    while True:
+        selected_gpu_models = prompt_gpu_model_selection()
+        print("\n" + "=" * 75)
+        print(f" 🔍 MENCARI GPU ({', '.join(selected_gpu_models)}) YANG SIAP DISEWA DI VAST.AI...")
+        print("=" * 75)
+        offers = search_available_gpus(gpu_names=selected_gpu_models, max_results=10)
+        if not offers:
+            print(f"[!] Tidak ada {', '.join(selected_gpu_models)} yang sedang kosong saat ini.")
+            retry_other = input("Coba pilih tipe GPU lain? [Y/n]: ").strip().lower()
+            if retry_other != "n":
+                continue
+            return None
 
-    print(f"\n{'#':<4} {'GPU':<12} {'Harga/Jam':<12} {'Internet':<12} {'Lokasi':<18} {'Reliability':<12}")
-    print("-" * 75)
-    for idx, o in enumerate(offers):
-        gpu = o.get("gpu_name", "GPU")
-        dph = o.get("dph_total", 0)
-        inet = f"{int(o.get('inet_down', 0))} Mbps"
-        loc = (o.get("geolocation") or "Unknown")[:17]
-        rel = f"{float(o.get('reliability2', 0))*100:.1f}%"
-        badge = " [🔥 Rekomendasi #1]" if idx == 0 else ""
-        print(f"[{idx+1}]  {gpu:<12} ${dph:<10.3f} {inet:<12} {loc:<18} {rel:<12}{badge}")
-    print("-" * 75)
+        print(f"\n{'#':<4} {'GPU':<14} {'VRAM':<8} {'Harga/Jam':<12} {'Internet':<12} {'Lokasi':<16} {'Reliab.':<10}")
+        print("-" * 80)
+        for idx, o in enumerate(offers):
+            gpu = o.get("gpu_name", "GPU")
+            vram_gb = int(round(float(o.get("gpu_ram", 0)) / 1024.0)) if o.get("gpu_ram") else 0
+            vram_str = f"{vram_gb}GB" if vram_gb > 0 else "-"
+            dph = o.get("dph_total", 0)
+            inet = f"{int(o.get('inet_down', 0))} Mbps"
+            loc = (o.get("geolocation") or "Unknown")[:15]
+            rel = f"{float(o.get('reliability2', 0))*100:.1f}%"
+            badge = " [🔥 Termurah]" if idx == 0 else ""
+            print(f"[{idx+1:<2}] {gpu:<14} {vram_str:<8} ${dph:<10.3f} {inet:<12} {loc:<16} {rel:<10}{badge}")
+        print("-" * 80)
 
-    choice = input("\nPilih nomor GPU untuk disewa [Default: 1]: ").strip() or "1"
-    try:
-        selected_idx = int(choice) - 1
-        if not (0 <= selected_idx < len(offers)):
+        choice = input("\nPilih nomor GPU untuk disewa (atau ketik 'g' untuk ganti tipe GPU) [Default: 1]: ").strip() or "1"
+        if choice.lower() == "g":
+            continue
+        try:
+            selected_idx = int(choice) - 1
+            if not (0 <= selected_idx < len(offers)):
+                selected_idx = 0
+        except ValueError:
             selected_idx = 0
-    except ValueError:
-        selected_idx = 0
+        break
 
     ensure_ssh_key_registered()
 
@@ -301,7 +337,7 @@ def display_and_rent_gpu_flow():
     # If all in initial queue failed, refresh offers once and retry
     if not new_inst_id:
         print("\n[*] Menyegarkan penawaran GPU terbaru dari Vast.ai...")
-        fresh_offers = search_available_gpus(max_results=6)
+        fresh_offers = search_available_gpus(gpu_names=selected_gpu_models, max_results=6)
         for candidate in fresh_offers:
             cand_id = candidate["id"]
             cand_gpu = candidate.get("gpu_name", "GPU")
@@ -876,9 +912,17 @@ def main():
                 print(f"[*] ⏱️ Session timer active (Booted at {b_str})")
             else:
                 record_vast_boot_time(time.time())
+            print(f"[1] Gunakan instance yang sedang berjalan ini ({gpu_name})")
+            print("[2] Ganti & sewa GPU lain (misal RTX 4090 / RTX 5090)")
+            run_opt = input("Pilih opsi [default: 1]: ").strip() or "1"
+            if run_opt == "2":
+                new_id = display_and_rent_gpu_flow()
+                if new_id:
+                    record_vast_boot_time(time.time())
+                    inst_data = wait_for_instance_running(new_id)
         else:
-            print("[1] Nyalakan instance yang sudah ada")
-            print("[2] Cari & sewa GPU baru yang ready")
+            print(f"[1] Nyalakan instance yang sudah ada ({gpu_name})")
+            print("[2] Cari & sewa GPU lain yang ready (RTX 4090 / RTX 5090 / dll)")
             opt = input("Pilih opsi [default: 1]: ").strip() or "1"
             if opt == "2":
                 new_id = display_and_rent_gpu_flow()

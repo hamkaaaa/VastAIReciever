@@ -17,6 +17,26 @@ import bpy
 try:
     bpy.context.scene.render.engine = 'CYCLES'
     bpy.context.preferences.filepaths.use_scripts_auto_execute = True
+    try:
+        bpy.ops.wm.save_userpref()
+    except Exception:
+        pass
+    for text in list(bpy.data.texts):
+        if text.name.lower().endswith(".py") or getattr(text, "use_module", False):
+            try:
+                exec(compile(text.as_string(), text.name, "exec"), {"__name__": "__main__", "__file__": text.name, "bpy": bpy})
+                print(f"[Scripts] Executed {text.name}")
+            except Exception as se:
+                print(f"[Scripts] Error in {text.name}: {se}")
+    for obj in bpy.data.objects:
+        if obj.animation_data:
+            for fc in obj.animation_data.drivers:
+                fc.driver.is_valid = True
+                fc.driver.expression = fc.driver.expression
+            obj.animation_data.drivers.update()
+        obj.update_tag(refresh={'OBJECT', 'DATA', 'TIME'})
+    bpy.context.scene.frame_set(bpy.context.scene.frame_current)
+    bpy.context.view_layer.update()
     bpy.context.scene.render.use_persistent_data = True
     cprefs = bpy.context.preferences.addons['cycles'].preferences
     # Try OptiX first, fallback to CUDA

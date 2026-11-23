@@ -453,7 +453,16 @@ def prepare_local_bundles_from_config():
     src_type = cfg.get("source_type", "gdrive")
     proj_path_str = (cfg.get("project_path") or "").strip().strip('"\'')
 
-    if src_type == "pc_upload" and proj_path_str:
+    if src_type == "gdrive" and not (cfg.get("gdrive_url") or "").strip():
+        current_project_file = None
+        current_project_type = None
+        return False, "Please paste a Google Drive share link first."
+
+    if src_type == "pc_upload":
+        if not proj_path_str:
+            current_project_file = None
+            current_project_type = None
+            return False, "Please select a local .blend, .zip, or project folder first."
         p = Path(proj_path_str)
         if not p.exists():
             return False, f"Project path not found: {p}"
@@ -857,6 +866,24 @@ class WorkerTunnelHandler(BaseHTTPRequestHandler):
         with state_lock:
             resp = dict(current_job_config)
         src_type = resp.get("source_type", "gdrive")
+        proj_path_str = (resp.get("project_path") or "").strip().strip('"\'')
+        needs_prep = False
+
+        if src_type == "pc_upload" and proj_path_str:
+            p = Path(proj_path_str)
+            if not current_project_file or not current_project_file.is_file():
+                needs_prep = True
+            elif p.is_file() and current_project_file.resolve() != p.resolve():
+                needs_prep = True
+            elif p.is_dir() and current_project_file.name != f"{p.name}.zip":
+                needs_prep = True
+
+        if resp.get("addon_paths") and (not current_addons_zip or not current_addons_zip.is_file()):
+            needs_prep = True
+
+        if needs_prep:
+            prepare_local_bundles_from_config()
+
         resp["tunnel_url"] = current_tunnel_url
         resp["has_addons"] = bool(current_addons_zip and current_addons_zip.is_file())
         if src_type == "gdrive" and resp.get("gdrive_url"):
@@ -870,6 +897,12 @@ class WorkerTunnelHandler(BaseHTTPRequestHandler):
         else:
             resp["gdrive_url"] = ""
             resp["upload_project"] = False
+
+        add_log(
+            f"Serving /api/job_config -> source={src_type}, upload_project={resp['upload_project']}, "
+            f"project={resp.get('project_name') or resp.get('gdrive_url') or 'vast_local'}",
+            "worker",
+        )
         return resp
 
     def do_GET(self):

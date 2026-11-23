@@ -414,13 +414,32 @@ def notify_pc_status(server_url, token, status_msg):
 
 def fetch_job_config(server_url, token):
     try:
-        cmd = ["curl", "-s", "-m", "6"] + _auth_headers(token) + [f"{server_url}/api/job_config"]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
-        if res.stdout.strip().startswith("{"):
-            return json.loads(res.stdout)
-    except Exception:
-        pass
+        cmd = ["curl", "-s", "-m", "10", "-w", "\n%{http_code}"] + _auth_headers(token) + [f"{server_url}/api/job_config"]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out = res.stdout.strip()
+        if "\n" in out:
+            body, code = out.rsplit("\n", 1)
+        else:
+            body, code = "", out
+        code = code.strip()
+        if code == "401":
+            print("[!] Error 401 Unauthorized from PC receiver (token mismatch or VastRenderHub restarted).")
+            print("    Please copy a fresh command or start the render directly from VastRenderHub.exe.")
+            sys.exit(1)
+        if code != "200":
+            print(f"[!] Warning: Could not fetch job config from PC (HTTP {code or res.returncode}).")
+            return {}
+        if body.strip().startswith("{"):
+            return json.loads(body)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"[!] Warning fetching job config: {e}")
     return {}
+
+
+IGNORED_BLEND_NAMES = {"userpref.blend", "startup.blend", "quit.blend"}
+IGNORED_WALK_DIRS = {"blender", "VastAIReciever", "__MACOSX", "render_output", "gdrive_downloads", "addons_staging"}
 
 
 def find_blend_file(explicit_path=None):
@@ -428,23 +447,38 @@ def find_blend_file(explicit_path=None):
         return str(Path(explicit_path).resolve())
 
     search_dirs = [
-        Path.cwd(),
         Path("/workspace"),
+        Path("/home/user/Downloads"),
+        Path("/home/user/Desktop"),
+        Path("/home/user"),
+        Path.home() / "Downloads",
         Path.home() / "Desktop",
-        Path.home(),
+        Path.cwd(),
     ]
 
     all_blends = []
+    seen_dirs = set()
     for d in search_dirs:
-        if d.exists():
-            all_blends.extend(list(d.glob("*.blend")))
-            all_blends.extend(list(d.glob("**/*.blend")))
+        if not d.exists():
+            continue
+        rd = str(d.resolve())
+        if rd in seen_dirs:
+            continue
+        seen_dirs.add(rd)
+        for root, dirs, files in os.walk(d):
+            # Prune hidden directories (.config, .cache, etc.) and internal tool directories
+            dirs[:] = [dn for dn in dirs if not dn.startswith(".") and dn not in IGNORED_WALK_DIRS]
+            for fn in files:
+                if not fn.lower().endswith(".blend"):
+                    continue
+                if fn.startswith("._") or fn.lower() in IGNORED_BLEND_NAMES:
+                    continue
+                all_blends.append(Path(root) / fn)
 
-    filtered = [p for p in set(all_blends) if "__MACOSX" not in p.parts and not p.name.startswith("._")]
-    unique_blends = sorted(filtered, key=lambda p: p.stat().st_mtime, reverse=True)
+    unique_blends = sorted(list({p.resolve() for p in all_blends}), key=lambda p: p.stat().st_mtime, reverse=True)
 
     if not unique_blends:
-        print("[!] No .blend files found in /workspace or home folder.")
+        print("[!] No user .blend files found in /workspace, Downloads, or Desktop.")
         sys.exit(1)
 
     print(f"\n[+] Found {len(unique_blends)} .blend file(s):")
@@ -453,7 +487,7 @@ def find_blend_file(explicit_path=None):
 
     selected = unique_blends[0]
     print(f"[*] Auto-selecting most recent: {selected.name}")
-    return str(selected.resolve())
+    return str(selected)
 
 
 def select_blend_from_extracted(extract_dir, preferred_name=""):
@@ -630,6 +664,14 @@ def prepare_project_and_settings(server_url, token, args, dash_cfg):
             blend_file = str(dest_file.resolve())
             print(f"[✓] Scene .blend ready: {blend_file}")
     else:
+        src_type = dash_cfg.get("source_type", "")
+        if src_type == "pc_upload":
+            print("[!] Fatal: PC receiver is set to Local PC upload, but no file is prepared.")
+            print("    Select your .blend/.zip in VastRenderHub.exe first, then click Start Render or Copy Cmd.")
+            sys.exit(1)
+        if src_type == "gdrive":
+            print("[!] Fatal: PC receiver is set to Google Drive, but no Google Drive URL was configured.")
+            sys.exit(1)
         explicit = args.blend or dash_cfg.get("vast_blend_path")
         blend_file = find_blend_file(explicit)
         print(f"[✓] Scene: {blend_file}")

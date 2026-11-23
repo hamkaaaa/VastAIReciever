@@ -830,6 +830,17 @@ class VastRenderHubApp(ctk.CTk):
                 "simplify_subdiv": subdiv,
                 "exec_all_scripts": bool(self.var_exec_all.get()),
             })
+            src_type = receiver.current_job_config["source_type"]
+
+        # Eagerly point current_project_file at single .blend/.zip files without blocking UI
+        if src_type == "pc_upload" and proj_path:
+            p = Path(proj_path)
+            if p.is_file() and p.suffix.lower() in (".blend", ".zip"):
+                receiver.current_project_file = p
+                receiver.current_project_type = "zip" if p.suffix.lower() == ".zip" else "blend"
+        elif src_type != "pc_upload":
+            receiver.current_project_file = None
+            receiver.current_project_type = None
 
     # ------------------------------------------------------------------ Actions
     def _start_render(self):
@@ -899,10 +910,19 @@ class VastRenderHubApp(ctk.CTk):
 
     def _copy_manual_command(self):
         self._sync_job_config()
+        ok, err = receiver.prepare_local_bundles_from_config()
+        if not ok:
+            messagebox.showwarning("Project Not Ready", err, parent=self)
+            return
         cmd = receiver.build_vast_worker_command(daemon=False)
         self.clipboard_clear()
         self.clipboard_append(cmd)
-        receiver.add_log("Copied manual Vast.ai render command to clipboard.", "system")
+        src_desc = (
+            receiver.current_project_file.name
+            if receiver.current_project_file
+            else (receiver.current_job_config.get("gdrive_url") or "Vast Local")
+        )
+        receiver.add_log(f"Copied manual Vast.ai command (source: {src_desc}).", "system")
 
     def _open_gpu_modal(self):
         self._save_config()

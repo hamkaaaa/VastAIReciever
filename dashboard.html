@@ -3,19 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vast.ai Render Hub & Live Frame Viewer</title>
+  <title>VastAI Render Hub — Blender 5.2 LTS</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg-dark: #090a0f;
-      --bg-card: rgba(18, 20, 29, 0.75);
-      --bg-card-hover: rgba(26, 29, 43, 0.85);
+      --bg-card: rgba(18, 20, 29, 0.85);
       --border-color: rgba(255, 255, 255, 0.08);
-      --border-accent: rgba(99, 102, 241, 0.3);
       --accent-primary: #6366f1;
-      --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+      --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 55%, #ec4899 100%);
       --accent-glow: rgba(99, 102, 241, 0.25);
       --success: #10b981;
       --warning: #f59e0b;
@@ -25,18 +23,14 @@
       --text-dim: #6b7280;
     }
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       background: var(--bg-dark);
-      background-image: 
-        radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.08) 0%, transparent 40%),
-        radial-gradient(circle at 85% 85%, rgba(236, 72, 153, 0.05) 0%, transparent 40%);
+      background-image:
+        radial-gradient(circle at 12% 12%, rgba(99, 102, 241, 0.09) 0%, transparent 42%),
+        radial-gradient(circle at 88% 85%, rgba(236, 72, 153, 0.06) 0%, transparent 42%);
       color: var(--text-main);
       min-height: 100vh;
       display: flex;
@@ -44,589 +38,280 @@
       overflow-x: hidden;
     }
 
-    /* TOP BAR */
     header {
-      background: rgba(13, 15, 22, 0.8);
+      background: rgba(13, 15, 22, 0.9);
       backdrop-filter: blur(16px);
       border-bottom: 1px solid var(--border-color);
-      padding: 12px 24px;
+      padding: 10px 20px;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 12px;
       position: sticky;
       top: 0;
       z-index: 100;
+      flex-wrap: wrap;
     }
 
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
+    .brand { display: flex; align-items: center; gap: 10px; }
     .brand-icon {
-      width: 36px;
-      height: 36px;
-      border-radius: 10px;
+      width: 34px; height: 34px; border-radius: 9px;
       background: var(--accent-gradient);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 800;
-      font-size: 18px;
-      color: white;
-      box-shadow: 0 4px 16px var(--accent-glow);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 17px; color: white; box-shadow: 0 4px 14px var(--accent-glow);
     }
-
     .brand-title {
-      font-size: 18px;
-      font-weight: 700;
-      letter-spacing: -0.02em;
+      font-size: 17px; font-weight: 700; letter-spacing: -0.02em;
       background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
-
-    .brand-badge {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      padding: 2px 8px;
-      border-radius: 6px;
-      background: rgba(99, 102, 241, 0.15);
-      border: 1px solid rgba(99, 102, 241, 0.3);
-      color: #a5b4fc;
-      font-weight: 600;
+    .badge {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 2px 8px; border-radius: 6px; font-weight: 600;
     }
+    .badge-gpu { background: rgba(99, 102, 241, 0.16); border: 1px solid rgba(99, 102, 241, 0.35); color: #a5b4fc; }
+    .badge-blender { background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); color: #fcd34d; }
 
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-
-    /* INSTANCE CONTROL WIDGET */
+    .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .instance-widget {
-      display: flex;
-      align-items: center;
-      background: rgba(22, 25, 38, 0.7);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 4px 6px;
-      gap: 10px;
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(22, 25, 38, 0.78); border: 1px solid var(--border-color);
+      border-radius: 11px; padding: 4px 8px; flex-wrap: wrap;
     }
 
     .status-indicator {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 4px 10px;
-      font-size: 13px;
-      font-weight: 600;
-      border-radius: 8px;
+      display: flex; align-items: center; gap: 7px; padding: 4px 9px;
+      font-size: 12px; font-weight: 600; border-radius: 7px;
     }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--text-dim);
-    }
-
-    .status-running .status-dot {
-      background: var(--success);
-      box-shadow: 0 0 10px var(--success);
-      animation: pulse 2s infinite;
-    }
-
-    .status-running {
-      color: var(--success);
-      background: rgba(16, 185, 129, 0.1);
-    }
-
-    .status-stopped .status-dot {
-      background: var(--text-dim);
-    }
-
-    .status-stopped {
-      color: var(--text-muted);
-      background: rgba(255, 255, 255, 0.04);
-    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+    .status-running { color: var(--success); background: rgba(16, 185, 129, 0.12); }
+    .status-running .status-dot { background: var(--success); box-shadow: 0 0 8px var(--success); animation: pulse 2s infinite; }
+    .status-warn { color: #fbbf24; background: rgba(245, 158, 11, 0.12); }
+    .status-warn .status-dot { background: #fbbf24; }
+    .status-stopped { color: var(--text-muted); background: rgba(255, 255, 255, 0.05); }
 
     .cost-meter {
-      font-size: 12px;
-      font-family: 'JetBrains Mono', monospace;
-      color: #94a3b8;
-      padding: 0 8px;
-      border-left: 1px solid var(--border-color);
+      font-size: 12px; font-family: 'JetBrains Mono', monospace;
+      color: #94a3b8; padding: 0 8px; border-left: 1px solid var(--border-color);
     }
-
-    .cost-meter span {
-      color: #38bdf8;
-      font-weight: 600;
-    }
+    .cost-meter span { color: #38bdf8; font-weight: 600; }
 
     .btn {
-      padding: 8px 14px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      border: 1px solid transparent;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;
+      cursor: pointer; border: 1px solid transparent; display: inline-flex;
+      align-items: center; justify-content: center; gap: 5px;
+      transition: all 0.18s ease; color: var(--text-main); background: rgba(255,255,255,0.06);
     }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn-primary { background: var(--accent-primary); color: white; }
+    .btn-primary:hover:not(:disabled) { background: #4f46e5; }
+    .btn-gradient { background: var(--accent-gradient); color: white; box-shadow: 0 4px 16px var(--accent-glow); }
+    .btn-gradient:hover:not(:disabled) { filter: brightness(1.08); }
+    .btn-danger { background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.35); color: #fca5a5; }
+    .btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); color: white; }
+    .btn-success { background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.35); color: #6ee7b7; }
+    .btn-success:hover:not(:disabled) { background: rgba(16, 185, 129, 0.28); color: white; }
+    .btn-ghost { background: rgba(255, 255, 255, 0.05); border-color: var(--border-color); color: var(--text-muted); }
+    .btn-ghost:hover:not(:disabled) { background: rgba(255, 255, 255, 0.11); color: var(--text-main); }
 
-    .btn-danger {
-      background: rgba(239, 68, 68, 0.15);
-      border-color: rgba(239, 68, 68, 0.3);
-      color: #fca5a5;
-    }
-
-    .btn-danger:hover {
-      background: rgba(239, 68, 68, 0.25);
-      border-color: rgba(239, 68, 68, 0.5);
-      color: white;
-    }
-
-    .btn-success {
-      background: rgba(16, 185, 129, 0.15);
-      border-color: rgba(16, 185, 129, 0.3);
-      color: #6ee7b7;
-    }
-
-    .btn-success:hover {
-      background: rgba(16, 185, 129, 0.25);
-      border-color: rgba(16, 185, 129, 0.5);
-      color: white;
-    }
-
-    .btn-ghost {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: var(--border-color);
-      color: var(--text-muted);
-    }
-
-    .btn-ghost:hover {
-      background: rgba(255, 255, 255, 0.1);
-      color: var(--text-main);
-    }
-
-    /* MAIN LAYOUT */
     main {
-      flex: 1;
-      display: grid;
-      grid-template-columns: 1fr 340px;
-      gap: 20px;
-      padding: 20px 24px;
-      max-width: 1800px;
-      width: 100%;
-      margin: 0 auto;
+      flex: 1; display: grid; grid-template-columns: 1fr 370px; gap: 16px;
+      padding: 16px 20px; max-width: 1900px; width: 100%; margin: 0 auto;
     }
 
-    /* PLAYER CONTAINER */
-    .player-card {
-      background: var(--bg-card);
-      backdrop-filter: blur(12px);
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+    @media (max-width: 1100px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    .left-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+    .player-card, .side-card, .console-card {
+      background: var(--bg-card); backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color); border-radius: 14px;
+      overflow: hidden; box-shadow: 0 10px 32px rgba(0, 0, 0, 0.35);
     }
 
     .player-header {
-      padding: 14px 20px;
+      padding: 11px 16px; border-bottom: 1px solid var(--border-color);
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+      background: rgba(0, 0, 0, 0.25); flex-wrap: wrap;
+    }
+
+    .job-selector-wrap { display: flex; align-items: center; gap: 8px; }
+    .job-selector-wrap label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+
+    select.job-select, .form-select {
+      background: rgba(12, 14, 22, 0.92); border: 1px solid var(--border-color);
+      color: var(--text-main); padding: 6px 10px; border-radius: 8px;
+      font-size: 12px; font-weight: 500; outline: none; cursor: pointer;
+    }
+
+    .status-strip {
+      padding: 8px 16px; background: rgba(15, 23, 42, 0.65);
       border-bottom: 1px solid var(--border-color);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      background: rgba(0, 0, 0, 0.2);
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      font-size: 12px; color: var(--text-muted); flex-wrap: wrap;
     }
-
-    .job-selector-wrap {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .job-selector-wrap label {
-      font-size: 13px;
-      color: var(--text-muted);
-      font-weight: 500;
-    }
-
-    select.job-select {
-      background: rgba(15, 17, 26, 0.8);
-      border: 1px solid var(--border-color);
-      color: var(--text-main);
-      padding: 6px 12px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 500;
-      outline: none;
-      cursor: pointer;
+    .status-strip code {
+      font-family: 'JetBrains Mono', monospace; color: #a5b4fc; font-size: 11px;
     }
 
     .live-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      color: #fca5a5;
-      border-radius: 20px;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.05em;
+      display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+      background: rgba(239, 68, 68, 0.16); border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5; border-radius: 20px; font-size: 11px; font-weight: 700;
     }
+    .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--danger); animation: pulse 1.4s infinite; }
 
-    .live-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--danger);
-      animation: pulse 1.5s infinite;
-    }
-
-    /* VIEWPORT */
     .viewport {
-      flex: 1;
-      min-height: 480px;
-      background: #050608;
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      background-image: 
-        radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-      background-size: 24px 24px;
+      height: 440px; background: #050608; position: relative;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+      background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+      background-size: 22px 22px;
     }
-
-    .viewport img {
-      max-width: 100%;
-      max-height: 100%;
-      object-fit: contain;
-      box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
-      transition: opacity 0.1s ease;
-      user-select: none;
+    .viewport img, .viewport video {
+      max-width: 100%; max-height: 100%; object-fit: contain;
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.8); user-select: none;
     }
-
     .empty-state {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 12px;
-      color: var(--text-dim);
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      color: var(--text-dim); text-align: center; padding: 20px;
     }
+    .empty-state svg { width: 44px; height: 44px; opacity: 0.4; }
 
-    .empty-state svg {
-      width: 48px;
-      height: 48px;
-      opacity: 0.4;
-    }
-
-    /* PLAYER CONTROLS */
     .player-controls {
-      background: rgba(13, 16, 24, 0.9);
-      border-top: 1px solid var(--border-color);
-      padding: 16px 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
+      background: rgba(13, 16, 24, 0.92); border-top: 1px solid var(--border-color);
+      padding: 12px 16px; display: flex; flex-direction: column; gap: 10px;
     }
-
-    .timeline-container {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-
+    .timeline-container { display: flex; align-items: center; gap: 12px; }
     .scrubber {
-      flex: 1;
-      height: 8px;
-      -webkit-appearance: none;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 4px;
-      outline: none;
-      cursor: pointer;
-      position: relative;
+      flex: 1; height: 7px; -webkit-appearance: none;
+      background: rgba(255, 255, 255, 0.12); border-radius: 4px; outline: none; cursor: pointer;
     }
-
     .scrubber::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      background: white;
-      box-shadow: 0 0 10px var(--accent-primary);
-      cursor: grab;
-      border: 3px solid var(--accent-primary);
+      -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+      background: white; box-shadow: 0 0 8px var(--accent-primary);
+      cursor: grab; border: 3px solid var(--accent-primary);
     }
-
     .frame-counter {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 14px;
-      font-weight: 600;
-      color: #e2e8f0;
-      min-width: 110px;
-      text-align: right;
+      font-family: 'JetBrains Mono', monospace; font-size: 13px;
+      font-weight: 600; color: #e2e8f0; min-width: 90px; text-align: right;
     }
-
-    .playback-bar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .playback-buttons {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
+    .playback-bar { display: flex; justify-content: space-between; align-items: center; }
+    .playback-buttons { display: flex; align-items: center; gap: 8px; }
     .ctrl-btn {
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid var(--border-color);
-      color: var(--text-main);
-      width: 38px;
-      height: 38px;
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: all 0.15s ease;
+      background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border-color);
+      color: var(--text-main); width: 34px; height: 34px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
     }
+    .ctrl-btn:hover { background: rgba(255, 255, 255, 0.13); }
+    .ctrl-btn-play { background: var(--accent-primary); border-color: var(--accent-primary); width: 40px; height: 38px; }
 
-    .ctrl-btn:hover {
-      background: rgba(255, 255, 255, 0.12);
-      border-color: rgba(255, 255, 255, 0.2);
-    }
-
-    .ctrl-btn-play {
-      background: var(--accent-primary);
-      border-color: var(--accent-primary);
-      width: 44px;
-      height: 44px;
-      border-radius: 12px;
-      box-shadow: 0 4px 16px var(--accent-glow);
-    }
-
-    .ctrl-btn-play:hover {
-      background: #4f46e5;
-    }
-
-    .speed-select {
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid var(--border-color);
-      color: var(--text-muted);
-      padding: 6px 10px;
-      border-radius: 8px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      outline: none;
-    }
-
-    /* FILMSTRIP THUMBNAILS */
     .filmstrip-card {
-      border-top: 1px solid var(--border-color);
-      padding: 12px 16px;
-      background: rgba(0, 0, 0, 0.3);
-      overflow-x: auto;
-      white-space: nowrap;
-      display: flex;
-      gap: 8px;
+      border-top: 1px solid var(--border-color); padding: 10px 14px;
+      background: rgba(0, 0, 0, 0.35); overflow-x: auto; white-space: nowrap;
+      display: flex; gap: 8px; min-height: 70px; align-items: center;
     }
-
-    .filmstrip-card::-webkit-scrollbar {
-      height: 6px;
-    }
-
-    .filmstrip-card::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.2);
-      border-radius: 3px;
-    }
-
     .thumb-item {
-      display: inline-block;
-      width: 80px;
-      height: 52px;
-      border-radius: 6px;
-      overflow: hidden;
-      border: 2px solid transparent;
-      cursor: pointer;
-      position: relative;
-      flex-shrink: 0;
-      background: #111;
-      transition: all 0.15s ease;
+      display: inline-block; width: 76px; height: 48px; border-radius: 6px;
+      overflow: hidden; border: 2px solid transparent; cursor: pointer;
+      position: relative; flex-shrink: 0; background: #111;
     }
-
-    .thumb-item img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-
-    .thumb-item.active {
-      border-color: var(--accent-primary);
-      box-shadow: 0 0 10px var(--accent-glow);
-      transform: scale(1.05);
-    }
-
+    .thumb-item img { width: 100%; height: 100%; object-fit: cover; }
+    .thumb-item.active { border-color: var(--accent-primary); box-shadow: 0 0 8px var(--accent-glow); }
     .thumb-number {
-      position: absolute;
-      bottom: 2px;
-      right: 4px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9px;
-      font-weight: 700;
-      background: rgba(0, 0, 0, 0.8);
-      padding: 1px 4px;
-      border-radius: 3px;
-      color: white;
+      position: absolute; bottom: 2px; right: 3px; font-family: 'JetBrains Mono', monospace;
+      font-size: 9px; font-weight: 700; background: rgba(0,0,0,0.8); padding: 1px 4px; border-radius: 3px;
     }
 
-    /* SIDEBAR / CONTROLS */
-    .sidebar {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
+    /* CONSOLE CARD */
+    .console-header {
+      padding: 10px 16px; border-bottom: 1px solid var(--border-color);
+      display: flex; justify-content: space-between; align-items: center;
+      background: rgba(0, 0, 0, 0.25);
     }
-
-    .side-card {
-      background: var(--bg-card);
-      backdrop-filter: blur(12px);
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
+    .console-body {
+      height: 205px; overflow-y: auto; padding: 10px 14px;
+      font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.5;
+      background: #06070b; color: #cbd5e1; white-space: pre-wrap; word-break: break-word;
     }
+    .log-line-blender { color: #93c5fd; }
+    .log-line-frame { color: #6ee7b7; }
+    .log-line-error { color: #fca5a5; }
+    .log-line-cost { color: #fcd34d; }
 
-    .card-title {
-      font-size: 15px;
-      font-weight: 700;
-      letter-spacing: -0.01em;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: #f1f5f9;
+    /* SIDEBAR */
+    .sidebar { display: flex; flex-direction: column; gap: 14px; }
+    .side-card { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .card-title { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 7px; color: #f1f5f9; }
+
+    .tab-bar { display: flex; gap: 4px; background: rgba(0, 0, 0, 0.35); padding: 4px; border-radius: 9px; }
+    .tab-btn {
+      flex: 1; padding: 6px 8px; font-size: 11px; font-weight: 600; border-radius: 7px;
+      border: none; cursor: pointer; background: transparent; color: var(--text-muted);
     }
+    .tab-btn.active { background: var(--accent-primary); color: white; }
 
-    .setting-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .setting-label {
-      font-size: 13px;
-      color: var(--text-main);
-      font-weight: 500;
-    }
-
-    .setting-desc {
-      font-size: 11px;
-      color: var(--text-dim);
-      margin-top: 2px;
-    }
-
-    /* TOGGLE SWITCH */
-    .switch {
-      position: relative;
-      display: inline-block;
-      width: 44px;
-      height: 24px;
-    }
-
-    .switch input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-
-    .slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: rgba(255, 255, 255, 0.15);
-      transition: .2s;
-      border-radius: 24px;
-    }
-
-    .slider:before {
-      position: absolute;
-      content: "";
-      height: 18px;
-      width: 18px;
-      left: 3px;
-      bottom: 3px;
-      background-color: white;
-      transition: .2s;
-      border-radius: 50%;
-    }
-
-    input:checked + .slider {
-      background-color: var(--accent-primary);
-    }
-
-    input:checked + .slider:before {
-      transform: translateX(20px);
-    }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .form-group label {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-muted);
-    }
-
+    .form-group { display: flex; flex-direction: column; gap: 5px; }
+    .form-group label { font-size: 11px; font-weight: 600; color: var(--text-muted); }
     .form-input {
-      background: rgba(10, 12, 18, 0.8);
-      border: 1px solid var(--border-color);
-      color: var(--text-main);
-      padding: 10px 12px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-family: 'JetBrains Mono', monospace;
-      outline: none;
-      transition: border-color 0.2s;
+      width: 100%; background: rgba(10, 12, 18, 0.85); border: 1px solid var(--border-color);
+      color: var(--text-main); padding: 8px 10px; border-radius: 8px;
+      font-size: 12px; font-family: 'JetBrains Mono', monospace; outline: none;
     }
+    .form-input:focus { border-color: var(--accent-primary); }
 
-    .form-input:focus {
-      border-color: var(--accent-primary);
+    .setting-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .setting-label { font-size: 12px; color: var(--text-main); font-weight: 500; }
+    .setting-desc { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+
+    .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: rgba(255, 255, 255, 0.15); transition: .2s; border-radius: 22px;
+    }
+    .slider:before {
+      position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
+      background-color: white; transition: .2s; border-radius: 50%;
+    }
+    input:checked + .slider { background-color: var(--accent-primary); }
+    input:checked + .slider:before { transform: translateX(18px); }
+
+    .addon-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #c7d2fe; font-size: 11px; padding: 3px 8px; border-radius: 6px;
     }
 
     .info-tip {
-      background: rgba(99, 102, 241, 0.08);
-      border: 1px solid rgba(99, 102, 241, 0.2);
-      border-radius: 10px;
-      padding: 12px;
-      font-size: 12px;
-      color: #c7d2fe;
-      line-height: 1.5;
+      background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.22);
+      border-radius: 9px; padding: 10px; font-size: 11px; color: #c7d2fe; line-height: 1.45;
     }
 
-    .info-tip strong {
-      color: white;
-      font-weight: 600;
+    /* GPU MARKETPLACE MODAL */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(6px);
+      display: none; align-items: center; justify-content: center; z-index: 250; padding: 20px;
     }
+    .modal-backdrop.open { display: flex; }
+    .modal-panel {
+      background: #111420; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 16px;
+      width: 100%; max-width: 920px; max-height: 88vh; display: flex; flex-direction: column;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65); overflow: hidden;
+    }
+    .modal-head {
+      padding: 14px 20px; border-bottom: 1px solid var(--border-color);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .modal-body { padding: 16px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+    .gpu-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .gpu-table th {
+      text-align: left; padding: 8px 10px; color: var(--text-muted); font-size: 11px;
+      border-bottom: 1px solid var(--border-color); text-transform: uppercase;
+    }
+    .gpu-table td { padding: 9px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+    .gpu-table tr:hover td { background: rgba(255, 255, 255, 0.03); }
 
     @keyframes pulse {
       0% { transform: scale(0.95); opacity: 0.8; }
@@ -637,20 +322,17 @@
 </head>
 <body>
 
-  <!-- HEADER -->
   <header>
     <div class="brand">
       <div class="brand-icon">⚡</div>
-      <div>
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span class="brand-title">VastAI Render Hub</span>
-          <span class="brand-badge">RTX 4090</span>
-        </div>
+      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <span class="brand-title">VastAI Render Hub</span>
+        <span id="gpuBadge" class="badge badge-gpu">NO GPU</span>
+        <span class="badge badge-blender">BLENDER 5.2 LTS</span>
       </div>
     </div>
 
     <div class="header-actions">
-      <!-- Vast Instance Quick Switcher -->
       <div class="instance-widget">
         <div id="instanceStatusBadge" class="status-indicator status-stopped">
           <span class="status-dot"></span>
@@ -658,137 +340,214 @@
         </div>
 
         <div class="cost-meter">
-          Rate: <span id="hourlyRateText">$0.409/hr</span>
+          Rate: <span id="hourlyRateText">--</span> | Session: <span id="sessionCostText">$0.000 (Rp 0)</span>
         </div>
 
-        <button id="btnStopInstance" class="btn btn-danger" onclick="toggleInstance('stop')">
-          ⏹ Stop Instance
-        </button>
-        <button id="btnStartInstance" class="btn btn-success" style="display: none;" onclick="toggleInstance('start')">
-          ▶ Start Instance
-        </button>
+        <button class="btn btn-primary" onclick="openGpuModal()">🎮 Rent / Switch GPU</button>
+        <button id="btnStartInstance" class="btn btn-success" style="display: none;" onclick="toggleInstance('start')">▶ Start</button>
+        <button id="btnStopInstance" class="btn btn-danger" style="display: none;" onclick="toggleInstance('stop')">⏹ Stop</button>
       </div>
 
-      <button class="btn btn-ghost" onclick="toggleConfigDrawer()">
-        ⚙ Settings
-      </button>
+      <button class="btn btn-ghost" onclick="toggleConfigDrawer()">⚙ Settings</button>
+      <button class="btn btn-danger" onclick="quitApp()" title="Shut down local hub and tunnel">✕ Quit</button>
     </div>
   </header>
 
-  <!-- MAIN APP -->
   <main>
-    <!-- LEFT: PLAYER CARD -->
-    <div class="player-card">
-      <div class="player-header">
-        <div class="job-selector-wrap">
-          <label>Job:</label>
-          <select id="jobSelector" class="job-select" onchange="onJobChange()">
-            <option value="">Loading jobs...</option>
-          </select>
-        </div>
-
-        <div style="display: flex; align-items: center; gap: 12px;">
-          <div id="liveBadge" class="live-badge" style="display: none;">
-            <span class="live-dot"></span>
-            <span>RENDERING LIVE</span>
-          </div>
-          <button class="btn btn-ghost" style="padding: 4px 8px;" onclick="openRendersFolder()">
-            📁 Open Folder
-          </button>
-        </div>
-      </div>
-
-      <!-- VIEWPORT -->
-      <div class="viewport" id="viewport">
-        <div id="emptyState" class="empty-state">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-          <p>Waiting for frames from Vast.ai...</p>
-        </div>
-        <img id="mainImage" style="display: none;" alt="Render Frame">
-      </div>
-
-      <!-- CONTROLS -->
-      <div class="player-controls">
-        <div class="timeline-container">
-          <input type="range" id="frameScrubber" class="scrubber" min="0" max="0" value="0" oninput="onScrub(this.value)">
-          <div id="frameCounter" class="frame-counter">0 / 0</div>
-        </div>
-
-        <div class="playback-bar">
-          <div class="playback-buttons">
-            <button class="ctrl-btn" onclick="stepFrame(-1)" title="Previous Frame">⏮</button>
-            <button id="btnPlayPause" class="ctrl-btn ctrl-btn-play" onclick="togglePlay()" title="Play / Pause">▶</button>
-            <button class="ctrl-btn" onclick="stepFrame(1)" title="Next Frame">⏭</button>
-            <button class="ctrl-btn" onclick="jumpToLatest()" title="Latest Frame">⏩</button>
-          </div>
-
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <label style="font-size: 12px; color: var(--text-muted); font-weight: 500;">Speed:</label>
-            <select id="fpsSelector" class="speed-select" onchange="setFps(this.value)">
-              <option value="12">12 fps</option>
-              <option value="24" selected>24 fps (Film)</option>
-              <option value="30">30 fps</option>
-              <option value="60">60 fps</option>
+    <!-- LEFT COLUMN: VIEWPORT + CONSOLE -->
+    <div class="left-col">
+      <div class="player-card">
+        <div class="player-header">
+          <div class="job-selector-wrap">
+            <label>Job:</label>
+            <select id="jobSelector" class="job-select" onchange="onJobChange()">
+              <option value="">No renders yet</option>
             </select>
-            <button class="ctrl-btn" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div id="liveBadge" class="live-badge" style="display: none;">
+              <span class="live-dot"></span>
+              <span id="liveBadgeText">RENDERING LIVE</span>
+            </div>
+            <button class="btn btn-ghost" onclick="openRendersFolder()">📁 Open Folder</button>
           </div>
         </div>
+
+        <div class="status-strip">
+          <div>
+            Tunnel: <code id="tunnelStatusText">Connecting Cloudflare tunnel...</code>
+          </div>
+          <div>
+            Worker: <strong id="workerStatusLabel" style="color: #e2e8f0;">Idle</strong>
+            (<span id="frameReceivedCount">0</span> frames received)
+          </div>
+        </div>
+
+        <div class="viewport" id="viewport">
+          <div id="emptyState" class="empty-state">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z">
+              </path>
+            </svg>
+            <p id="emptyStateMsg">Waiting for rendered frames from Vast.ai...</p>
+          </div>
+          <img id="mainImage" style="display: none;" alt="Render Frame">
+          <video id="mainVideo" style="display: none;" controls loop></video>
+        </div>
+
+        <div class="player-controls">
+          <div class="timeline-container">
+            <input type="range" id="frameScrubber" class="scrubber" min="0" max="0" value="0" oninput="onScrub(this.value)">
+            <div id="frameCounter" class="frame-counter">0 / 0</div>
+          </div>
+
+          <div class="playback-bar">
+            <div class="playback-buttons">
+              <button class="ctrl-btn" onclick="stepFrame(-1)" title="Previous Frame (Left Arrow)">⏮</button>
+              <button id="btnPlayPause" class="ctrl-btn ctrl-btn-play" onclick="togglePlay()" title="Play / Pause (Space)">▶</button>
+              <button class="ctrl-btn" onclick="stepFrame(1)" title="Next Frame (Right Arrow)">⏭</button>
+              <button class="ctrl-btn" onclick="jumpToLatest()" title="Jump to Latest Frame">⏩</button>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <label style="font-size: 12px; color: var(--text-muted);">Speed:</label>
+              <select id="fpsSelector" class="form-select" onchange="setFps(this.value)">
+                <option value="12">12 fps</option>
+                <option value="24" selected>24 fps</option>
+                <option value="30">30 fps</option>
+                <option value="60">60 fps</option>
+              </select>
+              <button class="ctrl-btn" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="filmstrip-card" id="filmstrip"></div>
       </div>
 
-      <!-- FILMSTRIP -->
-      <div class="filmstrip-card" id="filmstrip">
-        <!-- Thumbnails populated here -->
+      <!-- LIVE CONSOLE LOG -->
+      <div class="console-card">
+        <div class="console-header">
+          <div class="card-title"><span>🖥</span> Live Worker &amp; Blender 5.2 Console</div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <label style="font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; cursor: pointer;">
+              <input type="checkbox" id="chkAutoScroll" checked> Auto-scroll
+            </label>
+            <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="clearConsole()">Clear</button>
+          </div>
+        </div>
+        <div id="consoleOutput" class="console-body"></div>
       </div>
     </div>
 
-    <!-- RIGHT: COST EFFICIENCY & INSTANCE CONTROLS -->
+    <!-- RIGHT SIDEBAR -->
     <div class="sidebar">
+      <!-- PROJECT SOURCE CARD -->
+      <div class="side-card">
+        <div class="card-title"><span>📁</span> Project &amp; Add-ons</div>
+
+        <div class="tab-bar">
+          <button id="srcTabGdrive" class="tab-btn active" onclick="setSourceType('gdrive')">Google Drive</button>
+          <button id="srcTabLocal" class="tab-btn" onclick="setSourceType('pc_upload')">Local PC</button>
+          <button id="srcTabVast" class="tab-btn" onclick="setSourceType('vast_local')">Vast Local</button>
+        </div>
+
+        <div id="panelGdrive" class="form-group">
+          <label>Google Drive Share Link (.blend or .zip):</label>
+          <input type="text" id="inpGdriveUrl" class="form-input" placeholder="https://drive.google.com/file/d/..." onchange="updateJobConfig()">
+          <span style="font-size: 10px; color: var(--text-dim);">Set sharing to "Anyone with the link can view".</span>
+        </div>
+
+        <div id="panelLocal" style="display: none; flex-direction: column; gap: 8px;">
+          <div class="form-group">
+            <label>Local File (.blend / .zip) or Project Folder:</label>
+            <input type="text" id="inpProjectPath" class="form-input" placeholder="Select .blend, .zip, or folder..." onchange="updateJobConfig()">
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-ghost" style="flex: 1;" onclick="browseProject('file')">📄 Browse File</button>
+            <button class="btn btn-ghost" style="flex: 1;" onclick="browseProject('folder')">📂 Browse Folder</button>
+          </div>
+          <div id="zipBlendWrap" class="form-group" style="display: none;">
+            <label>Scene .blend inside Archive:</label>
+            <select id="selZipBlend" class="form-select" onchange="updateJobConfig()"></select>
+          </div>
+        </div>
+
+        <div id="panelVastLocal" style="display: none;" class="form-group">
+          <label>Path on Vast.ai (blank = auto-detect newest .blend):</label>
+          <input type="text" id="inpVastBlendPath" class="form-input" placeholder="/workspace/scene.blend" onchange="updateJobConfig()">
+        </div>
+
+        <div style="border-top: 1px solid var(--border-color); padding-top: 10px; display: flex; flex-direction: column; gap: 7px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);">Blender 5.2 Add-ons (optional):</span>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="browseAddons()">+ Add .zip/.py</button>
+              <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="clearAddons()">Clear</button>
+            </div>
+          </div>
+          <div id="addonsList" style="display: flex; flex-wrap: wrap; gap: 5px;">
+            <span style="font-size: 11px; color: var(--text-dim);">None attached (Camera Shakify auto-shim is built-in)</span>
+          </div>
+        </div>
+      </div>
+
       <!-- RENDER DISPATCHER CARD -->
-      <div class="side-card" style="border-color: rgba(99, 102, 241, 0.4); box-shadow: 0 4px 20px rgba(99, 102, 241, 0.15);">
-        <div class="card-title" style="color: #a5b4fc;">
-          <span>🎬</span> Render Job Dispatcher
+      <div class="side-card" style="border-color: rgba(99, 102, 241, 0.42);">
+        <div class="card-title" style="color: #a5b4fc;"><span>🎬</span> Render Settings (Blender 5.2 LTS)</div>
+
+        <div class="tab-bar">
+          <button id="tabAll" class="tab-btn active" onclick="setMode('all')">Full Anim</button>
+          <button id="tabRange" class="tab-btn" onclick="setMode('range')">Frame Range</button>
+          <button id="tabSingle" class="tab-btn" onclick="setMode('single')">Single Frame</button>
         </div>
 
-        <div style="display: flex; gap: 8px; background: rgba(0,0,0,0.3); padding: 4px; border-radius: 8px;">
-          <button id="tabRange" class="btn" style="flex: 1; padding: 6px; font-size: 11px; background: var(--accent-primary); color: white;" onclick="setMode('range')">Frame Range</button>
-          <button id="tabSingle" class="btn" style="flex: 1; padding: 6px; font-size: 11px; background: transparent; color: var(--text-muted);" onclick="setMode('single')">Single Frame</button>
-        </div>
-
-        <!-- Range Inputs -->
-        <div id="rangeInputs" style="display: flex; gap: 10px;">
+        <div id="rangeInputs" style="display: none; gap: 10px;">
           <div class="form-group" style="flex: 1;">
             <label>Start Frame:</label>
-            <input type="number" id="inpStartFrame" class="form-input" placeholder="e.g. 1" oninput="updateJobConfig()">
+            <input type="number" id="inpStartFrame" class="form-input" placeholder="1" oninput="updateJobConfig()">
           </div>
           <div class="form-group" style="flex: 1;">
             <label>End Frame:</label>
-            <input type="number" id="inpEndFrame" class="form-input" placeholder="e.g. 120" oninput="updateJobConfig()">
+            <input type="number" id="inpEndFrame" class="form-input" placeholder="120" oninput="updateJobConfig()">
           </div>
         </div>
 
-        <!-- Single Frame Input -->
         <div id="singleInput" style="display: none;" class="form-group">
           <label>Frame Number:</label>
-          <input type="number" id="inpSingleFrame" class="form-input" placeholder="e.g. 10" oninput="updateJobConfig()">
+          <input type="number" id="inpSingleFrame" class="form-input" placeholder="1" oninput="updateJobConfig()">
         </div>
 
-        <!-- Samples -->
         <div class="form-group">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <label>Cycles Samples:</label>
+            <label>Cycles Samples (blank = .blend default):</label>
             <div style="display: flex; gap: 4px;">
-              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples(64)">64</button>
-              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples(128)">128</button>
-              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples(256)">256</button>
+              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples('')">Default</button>
+              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples('64')">64</button>
+              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples('128')">128</button>
+              <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 10px;" onclick="setSamples('256')">256</button>
             </div>
           </div>
-          <input type="number" id="inpSamples" class="form-input" value="128" oninput="updateJobConfig()">
+          <input type="number" id="inpSamples" class="form-input" placeholder="Default (.blend setting)" oninput="updateJobConfig()">
         </div>
 
         <div class="setting-row">
           <div>
-            <div class="setting-label">OptiX AI Denoising</div>
-            <div class="setting-desc">Clean render with RTX tensor cores</div>
+            <div class="setting-label">Auto-Run All Blender Scripts</div>
+            <div class="setting-desc">Runs embedded scripts, Shakify &amp; refreshes drivers</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="chkExecAllScripts" checked onchange="updateJobConfig()">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">AI Denoising (OptiX / OIDN)</div>
+            <div class="setting-desc">Auto-falls back to OIDN if OptiX weights absent</div>
           </div>
           <label class="switch">
             <input type="checkbox" id="chkDenoise" checked onchange="updateJobConfig()">
@@ -796,29 +555,61 @@
           </label>
         </div>
 
-        <button id="btnTriggerRender" class="btn" style="width: 100%; justify-content: center; background: var(--accent-gradient); color: white; padding: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 16px var(--accent-glow);" onclick="dispatchRender()">
-          🚀 Trigger Render on Vast.ai
-        </button>
-
-        <div style="border-top: 1px solid var(--border-color); padding-top: 10px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <span style="font-size: 11px; color: var(--text-dim); font-weight: 600;">VAST.AI COMMAND:</span>
-            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10px;" onclick="copyVastCommand()">📋 Copy</button>
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">Persistent Data</div>
+            <div class="setting-desc">Keeps BVH &amp; textures in VRAM across frames</div>
           </div>
-          <textarea id="txtCommand" readonly style="width: 100%; height: 58px; background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); border-radius: 6px; color: #a5b4fc; font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 6px; resize: none; outline: none;"></textarea>
-        </div>
-      </div>
-
-      <!-- COST SAVINGS CARD -->
-      <div class="side-card">
-        <div class="card-title">
-          <span>💰</span> Cost Optimization
+          <label class="switch">
+            <input type="checkbox" id="chkPersistentData" checked onchange="updateJobConfig()">
+            <span class="slider"></span>
+          </label>
         </div>
 
         <div class="setting-row">
           <div>
+            <div class="setting-label">Simplify (Max Subdiv)</div>
+            <div class="setting-desc">Cap render subdivision level</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="number" id="inpSimplifySubdiv" class="form-input" value="2" min="0" max="6" style="width: 52px; padding: 4px 6px; text-align: center;" onchange="updateJobConfig()">
+            <label class="switch">
+              <input type="checkbox" id="chkSimplify" onchange="updateJobConfig()">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px;">
+          <button id="btnStartRender" class="btn btn-gradient" style="flex: 1; padding: 11px; font-size: 13px;" onclick="startRender()">
+            🚀 Start Render on Vast.ai
+          </button>
+          <button id="btnCancelLaunch" class="btn btn-danger" style="display: none; padding: 11px;" onclick="cancelLaunch()">
+            ⏹ Cancel
+          </button>
+        </div>
+
+        <button class="btn btn-ghost" style="width: 100%;" onclick="queueDaemonJob()">
+          🛰 Queue Job to Running Daemon Worker
+        </button>
+
+        <div style="border-top: 1px solid var(--border-color); padding-top: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+            <span style="font-size: 10px; color: var(--text-dim); font-weight: 600;">MANUAL TERMINAL COMMAND (JUPYTER):</span>
+            <button class="btn btn-ghost" style="padding: 2px 7px; font-size: 10px;" onclick="copyVastCommand()">📋 Copy</button>
+          </div>
+          <textarea id="txtCommand" readonly style="width: 100%; height: 54px; background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); border-radius: 6px; color: #a5b4fc; font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 6px; resize: none; outline: none;"></textarea>
+        </div>
+      </div>
+
+      <!-- COST SAVINGS & CREDENTIALS -->
+      <div class="side-card" id="configCard">
+        <div class="card-title"><span>⚙</span> Cost Protection &amp; Vast.ai Key</div>
+
+        <div class="setting-row">
+          <div>
             <div class="setting-label">Auto-Stop on Finish</div>
-            <div class="setting-desc">Shuts down instance the second render finishes</div>
+            <div class="setting-desc">Stops GPU immediately after last frame</div>
           </div>
           <label class="switch">
             <input type="checkbox" id="chkAutoStop" checked onchange="saveConfig()">
@@ -828,45 +619,95 @@
 
         <div class="setting-row">
           <div>
-            <div class="setting-label">Idle Auto-Stop</div>
-            <div class="setting-desc">Power down if inactive for 10 minutes</div>
+            <div class="setting-label">Idle Auto-Stop (mins)</div>
+            <div class="setting-desc">Stops GPU if no render runs</div>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="chkIdleStop" checked onchange="saveConfig()">
-            <span class="slider"></span>
-          </label>
-        </div>
-
-        <div class="info-tip">
-          💡 <strong>Pro Tip:</strong> An idle RTX 4090 costs <strong>$0.409/hr</strong>. When STOPPED, you only pay storage (<strong>~$0.005/hr</strong>), saving <strong>98%</strong> of credits!
-        </div>
-      </div>
-
-      <!-- VAST CONFIG CARD -->
-      <div class="side-card" id="configCard">
-        <div class="card-title">
-          <span>⚙</span> Vast.ai Credentials
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="number" id="inpIdleMinutes" class="form-input" value="10" min="1" max="240" style="width: 54px; padding: 4px 6px; text-align: center;" onchange="saveConfig()">
+            <label class="switch">
+              <input type="checkbox" id="chkIdleStop" checked onchange="saveConfig()">
+              <span class="slider"></span>
+            </label>
+          </div>
         </div>
 
         <div class="form-group">
           <label>Vast.ai API Key:</label>
           <input type="password" id="inputApiKey" class="form-input" placeholder="Paste Vast API Key..." onchange="saveConfig()">
-          <span style="font-size: 11px; color: var(--text-dim);">
-            Get it at <a href="https://cloud.vast.ai/account/" target="_blank" style="color: #818cf8; text-decoration: none;">cloud.vast.ai/account</a>
+          <span style="font-size: 10px; color: var(--text-dim);">
+            Find yours at <a href="https://cloud.vast.ai/account/" target="_blank" style="color: #818cf8; text-decoration: none;">cloud.vast.ai/account</a>
           </span>
         </div>
 
         <div class="form-group">
-          <label>Instance ID:</label>
-          <input type="text" id="inputInstanceId" class="form-input" placeholder="e.g. 54816424" value="54816424" onchange="saveConfig()">
+          <label>Active Instance ID:</label>
+          <input type="text" id="inputInstanceId" class="form-input" placeholder="Auto-filled when renting or select from GPU modal" onchange="saveConfig()">
         </div>
 
-        <button class="btn btn-ghost" style="width: 100%; justify-content: center;" onclick="testInstanceConnection()">
-          Test Vast.ai Connection
-        </button>
+        <button class="btn btn-ghost" style="width: 100%;" onclick="testInstanceConnection()">Save &amp; Refresh Instance</button>
+
+        <div id="costTip" class="info-tip">
+          💡 <strong>Auto-Stop Protection:</strong> Stopping your instance when done pauses GPU billing while keeping your disk data.
+        </div>
       </div>
     </div>
   </main>
+
+  <!-- GPU MARKETPLACE & INSTANCE MANAGER MODAL -->
+  <div id="gpuModal" class="modal-backdrop">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div class="card-title"><span>🎮</span> Rent or Switch Vast.ai GPU</div>
+        <button class="btn btn-ghost" onclick="closeGpuModal()">✕ Close</button>
+      </div>
+      <div class="modal-body">
+        <div>
+          <div style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px;">Your Existing Instances:</div>
+          <div id="existingInstancesList" style="display: flex; flex-direction: column; gap: 6px;"></div>
+        </div>
+
+        <div style="border-top: 1px solid var(--border-color); padding-top: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <button class="btn btn-primary gpu-preset" onclick="searchGpus('RTX 5090,RTX 4090,RTX 3090,RTX 4080')">All Best</button>
+              <button class="btn btn-ghost gpu-preset" onclick="searchGpus('RTX 5090')">RTX 5090</button>
+              <button class="btn btn-ghost gpu-preset" onclick="searchGpus('RTX 4090,RTX 4090D')">RTX 4090</button>
+              <button class="btn btn-ghost gpu-preset" onclick="searchGpus('RTX 3090,RTX 3090 Ti')">RTX 3090</button>
+              <button class="btn btn-ghost gpu-preset" onclick="searchGpus('RTX 4080,RTX 4080S,RTX 4070 Ti')">RTX 4080</button>
+              <button class="btn btn-ghost gpu-preset" onclick="searchGpus('ALL')">Any GPU</button>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <input type="text" id="inpCustomGpu" class="form-input" placeholder="e.g. L40S, H100" style="width: 150px; padding: 5px 8px;">
+              <button class="btn btn-ghost" onclick="searchGpus(document.getElementById('inpCustomGpu').value)">Search</button>
+            </div>
+          </div>
+
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); margin-bottom: 8px; cursor: pointer;">
+            <input type="checkbox" id="chkDestroyOldOnRent"> Destroy previous instance automatically after renting a new one
+          </label>
+
+          <div id="gpuOffersWrap" style="max-height: 320px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 10px;">
+            <table class="gpu-table">
+              <thead>
+                <tr>
+                  <th>GPU</th>
+                  <th>VRAM</th>
+                  <th>Price / Hr</th>
+                  <th>Download</th>
+                  <th>Location</th>
+                  <th>Reliability</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="gpuOffersBody">
+                <tr><td colspan="7" style="color: var(--text-dim); text-align: center; padding: 20px;">Select a GPU filter above to load live offers.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script>
     let frames = [];
@@ -874,20 +715,32 @@
     let isPlaying = false;
     let playInterval = null;
     let fps = 24;
-    let currentJob = "";
-    let autoStopOnFinish = true;
+    let currentJob = '';
+    let renderMode = 'all';
+    let sourceType = 'gdrive';
+    let addonPaths = [];
+    let lastLogId = 0;
+    let cachedOffers = [];
+    let latestState = {};
 
-    let renderMode = 'range';
-    let currentTunnelUrl = '';
+    function setSourceType(type) {
+      sourceType = type;
+      document.getElementById('srcTabGdrive').classList.toggle('active', type === 'gdrive');
+      document.getElementById('srcTabLocal').classList.toggle('active', type === 'pc_upload');
+      document.getElementById('srcTabVast').classList.toggle('active', type === 'vast_local');
+      document.getElementById('panelGdrive').style.display = type === 'gdrive' ? 'flex' : 'none';
+      document.getElementById('panelLocal').style.display = type === 'pc_upload' ? 'flex' : 'none';
+      document.getElementById('panelVastLocal').style.display = type === 'vast_local' ? 'flex' : 'none';
+      updateJobConfig();
+    }
 
     function setMode(mode) {
       renderMode = mode;
+      document.getElementById('tabAll').classList.toggle('active', mode === 'all');
+      document.getElementById('tabRange').classList.toggle('active', mode === 'range');
+      document.getElementById('tabSingle').classList.toggle('active', mode === 'single');
       document.getElementById('rangeInputs').style.display = mode === 'range' ? 'flex' : 'none';
       document.getElementById('singleInput').style.display = mode === 'single' ? 'flex' : 'none';
-      document.getElementById('tabRange').style.background = mode === 'range' ? 'var(--accent-primary)' : 'transparent';
-      document.getElementById('tabRange').style.color = mode === 'range' ? 'white' : 'var(--text-muted)';
-      document.getElementById('tabSingle').style.background = mode === 'single' ? 'var(--accent-primary)' : 'transparent';
-      document.getElementById('tabSingle').style.color = mode === 'single' ? 'white' : 'var(--text-muted)';
       updateJobConfig();
     }
 
@@ -896,88 +749,234 @@
       updateJobConfig();
     }
 
+    function renderZipBlendsDropdown(list, selectedVal) {
+      const wrap = document.getElementById('zipBlendWrap');
+      const sel = document.getElementById('selZipBlend');
+      if (!list || list.length <= 1) {
+        wrap.style.display = 'none';
+        sel.innerHTML = '';
+        return;
+      }
+      wrap.style.display = 'flex';
+      sel.innerHTML = '';
+      list.forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = item;
+        opt.textContent = item;
+        sel.appendChild(opt);
+      });
+      if (selectedVal && list.includes(selectedVal)) {
+        sel.value = selectedVal;
+      }
+    }
+
+    function renderAddonsChips() {
+      const box = document.getElementById('addonsList');
+      box.innerHTML = '';
+      if (!addonPaths || addonPaths.length === 0) {
+        const span = document.createElement('span');
+        span.style.fontSize = '11px';
+        span.style.color = 'var(--text-dim)';
+        span.textContent = 'None attached (Camera Shakify auto-shim is built-in)';
+        box.appendChild(span);
+        return;
+      }
+      addonPaths.forEach((p, idx) => {
+        const chip = document.createElement('span');
+        chip.className = 'addon-chip';
+        const base = p.split(/[\\/]/).pop();
+        chip.textContent = base + ' ';
+        const x = document.createElement('button');
+        x.textContent = '×';
+        x.style.cssText = 'background:none;border:none;color:#fca5a5;cursor:pointer;font-weight:700;';
+        x.onclick = () => {
+          addonPaths.splice(idx, 1);
+          renderAddonsChips();
+          updateJobConfig();
+        };
+        chip.appendChild(x);
+        box.appendChild(chip);
+      });
+    }
+
+    async function browseProject(kind) {
+      try {
+        const res = await fetch('/api/browse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind })
+        });
+        const data = await res.json();
+        if (data.error) { alert('Browse error: ' + data.error); return; }
+        if (data.path) {
+          document.getElementById('inpProjectPath').value = data.path;
+          renderZipBlendsDropdown(data.zip_blend_files || [], '');
+          setSourceType('pc_upload');
+        }
+      } catch (e) {
+        alert('Browse failed: ' + e);
+      }
+    }
+
+    async function browseAddons() {
+      try {
+        const res = await fetch('/api/browse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'addons' })
+        });
+        const data = await res.json();
+        if (data.error) { alert('Browse error: ' + data.error); return; }
+        if (data.paths && data.paths.length > 0) {
+          data.paths.forEach(p => { if (!addonPaths.includes(p)) addonPaths.push(p); });
+          renderAddonsChips();
+          updateJobConfig();
+        }
+      } catch (e) {
+        alert('Browse failed: ' + e);
+      }
+    }
+
+    function clearAddons() {
+      addonPaths = [];
+      renderAddonsChips();
+      updateJobConfig();
+    }
+
     async function loadJobConfig() {
       try {
         const res = await fetch('/api/job_config');
         const data = await res.json();
-        if (data.tunnel_url) currentTunnelUrl = data.tunnel_url;
-        if (data.start_frame) document.getElementById('inpStartFrame').value = data.start_frame;
-        if (data.end_frame) document.getElementById('inpEndFrame').value = data.end_frame;
-        if (data.single_frame) document.getElementById('inpSingleFrame').value = data.single_frame;
-        if (data.samples) document.getElementById('inpSamples').value = data.samples;
-        if (data.denoise !== undefined) document.getElementById('chkDenoise').checked = data.denoise;
-        updateCommandBox();
+        sourceType = data.source_type || 'gdrive';
+        renderMode = data.render_mode || 'all';
+        addonPaths = data.addon_paths || [];
+
+        document.getElementById('inpGdriveUrl').value = data.gdrive_url || '';
+        document.getElementById('inpProjectPath').value = data.project_path || '';
+        document.getElementById('inpVastBlendPath').value = data.vast_blend_path || '';
+        document.getElementById('inpStartFrame').value = data.start_frame || '';
+        document.getElementById('inpEndFrame').value = data.end_frame || '';
+        document.getElementById('inpSingleFrame').value = data.single_frame || '';
+        document.getElementById('inpSamples').value = data.samples || '';
+        document.getElementById('chkDenoise').checked = data.denoise !== false;
+        document.getElementById('chkPersistentData').checked = data.persistent_data !== false;
+        document.getElementById('chkSimplify').checked = Boolean(data.use_simplify);
+        document.getElementById('inpSimplifySubdiv').value = data.simplify_subdiv !== undefined ? data.simplify_subdiv : 2;
+        document.getElementById('chkExecAllScripts').checked = data.exec_all_scripts !== false;
+
+        renderZipBlendsDropdown(data.zip_blend_files || [], data.blend_in_zip || '');
+        renderAddonsChips();
+
+        document.getElementById('srcTabGdrive').classList.toggle('active', sourceType === 'gdrive');
+        document.getElementById('srcTabLocal').classList.toggle('active', sourceType === 'pc_upload');
+        document.getElementById('srcTabVast').classList.toggle('active', sourceType === 'vast_local');
+        document.getElementById('panelGdrive').style.display = sourceType === 'gdrive' ? 'flex' : 'none';
+        document.getElementById('panelLocal').style.display = sourceType === 'pc_upload' ? 'flex' : 'none';
+        document.getElementById('panelVastLocal').style.display = sourceType === 'vast_local' ? 'flex' : 'none';
+
+        document.getElementById('tabAll').classList.toggle('active', renderMode === 'all');
+        document.getElementById('tabRange').classList.toggle('active', renderMode === 'range');
+        document.getElementById('tabSingle').classList.toggle('active', renderMode === 'single');
+        document.getElementById('rangeInputs').style.display = renderMode === 'range' ? 'flex' : 'none';
+        document.getElementById('singleInput').style.display = renderMode === 'single' ? 'flex' : 'none';
       } catch (e) {
         console.error(e);
       }
     }
 
     async function updateJobConfig() {
+      const selZip = document.getElementById('selZipBlend');
       const payload = {
+        source_type: sourceType,
+        gdrive_url: document.getElementById('inpGdriveUrl').value.trim(),
+        project_path: document.getElementById('inpProjectPath').value.trim(),
+        blend_in_zip: selZip && selZip.value ? selZip.value : '',
+        vast_blend_path: document.getElementById('inpVastBlendPath').value.trim(),
+        addon_paths: addonPaths,
+        render_mode: renderMode,
         start_frame: document.getElementById('inpStartFrame').value.trim(),
         end_frame: document.getElementById('inpEndFrame').value.trim(),
-        single_frame: renderMode === 'single' ? document.getElementById('inpSingleFrame').value.trim() : '',
+        single_frame: document.getElementById('inpSingleFrame').value.trim(),
         samples: document.getElementById('inpSamples').value.trim(),
-        denoise: document.getElementById('chkDenoise').checked
+        denoise: document.getElementById('chkDenoise').checked,
+        persistent_data: document.getElementById('chkPersistentData').checked,
+        use_simplify: document.getElementById('chkSimplify').checked,
+        simplify_subdiv: parseInt(document.getElementById('inpSimplifySubdiv').value || '2', 10),
+        exec_all_scripts: document.getElementById('chkExecAllScripts').checked
       };
-      await fetch('/api/job_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      updateCommandBox();
+      try {
+        const res = await fetch('/api/job_config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const out = await res.json();
+        if (out.job_config) {
+          renderZipBlendsDropdown(out.job_config.zip_blend_files || [], out.job_config.blend_in_zip || '');
+        }
+      } catch (e) {
+        console.error(e);
+      }
     }
 
-    function updateCommandBox() {
-      let args = `--server ${currentTunnelUrl || 'https://<your-tunnel>.trycloudflare.com'}`;
-      const s = document.getElementById('inpStartFrame').value.trim();
-      const e = document.getElementById('inpEndFrame').value.trim();
-      const sf = document.getElementById('inpSingleFrame').value.trim();
-
-      if (renderMode === 'single' && sf) {
-        args += ` --single ${sf}`;
-      } else if (s && e) {
-        args += ` --start ${s} --end ${e}`;
+    async function startRender() {
+      await updateJobConfig();
+      const btn = document.getElementById('btnStartRender');
+      btn.disabled = true;
+      btn.innerText = '⏳ Starting Render...';
+      try {
+        const res = await fetch('/api/start_render', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert(data.error || 'Failed to start render');
+        }
+      } catch (e) {
+        alert('Error starting render: ' + e);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '🚀 Start Render on Vast.ai';
+        pollState();
       }
+    }
 
-      document.getElementById('txtCommand').value = `curl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- --daemon ${args}`;
+    async function queueDaemonJob() {
+      await updateJobConfig();
+      try {
+        const res = await fetch('/api/trigger_daemon_job', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ daemon_only: true })
+        });
+        const data = await res.json();
+        if (!data.success) alert(data.error || 'Failed to queue job');
+      } catch (e) {
+        alert('Error: ' + e);
+      }
+    }
+
+    async function cancelLaunch() {
+      await fetch('/api/cancel_launch', { method: 'POST' });
     }
 
     function copyVastCommand() {
       const txt = document.getElementById('txtCommand');
       txt.select();
       navigator.clipboard.writeText(txt.value);
-      alert('Command copied! Paste into Vast.ai terminal once.');
     }
 
-    async function dispatchRender() {
-      const btn = document.getElementById('btnTriggerRender');
-      btn.innerText = '⏳ Dispatching Render...';
-      btn.disabled = true;
-
-      await updateJobConfig();
-
-      try {
-        const res = await fetch('/api/trigger_daemon_job', { method: 'POST' });
-        const data = await res.json();
-        alert('🚀 Render job sent! Vast.ai worker will execute immediately.\\n(If worker is not yet running in Jupyter, run the command shown below).');
-      } catch (e) {
-        alert('Error: ' + e);
-      } finally {
-        btn.innerText = '🚀 Trigger Render on Vast.ai';
-        btn.disabled = false;
-      }
-    }
-
-    // Load initial config
     async function loadConfig() {
       try {
         const res = await fetch('/api/config');
         const data = await res.json();
         if (data.api_key) document.getElementById('inputApiKey').value = data.api_key;
-        if (data.instance_id) document.getElementById('inputInstanceId').value = data.instance_id;
+        document.getElementById('inputInstanceId').value = data.instance_id || '';
         document.getElementById('chkAutoStop').checked = data.auto_stop !== false;
         document.getElementById('chkIdleStop').checked = data.idle_stop !== false;
+        document.getElementById('inpIdleMinutes').value = data.idle_minutes || 10;
       } catch (e) {
         console.error(e);
       }
@@ -988,7 +987,8 @@
         api_key: document.getElementById('inputApiKey').value.trim(),
         instance_id: document.getElementById('inputInstanceId').value.trim(),
         auto_stop: document.getElementById('chkAutoStop').checked,
-        idle_stop: document.getElementById('chkIdleStop').checked
+        idle_stop: document.getElementById('chkIdleStop').checked,
+        idle_minutes: parseInt(document.getElementById('inpIdleMinutes').value || '10', 10)
       };
       await fetch('/api/config', {
         method: 'POST',
@@ -998,121 +998,327 @@
       fetchInstanceStatus();
     }
 
-    // Instance Status & Control
     async function fetchInstanceStatus() {
       try {
         const res = await fetch('/api/instance_status');
         const data = await res.json();
         const badge = document.getElementById('instanceStatusBadge');
         const txt = document.getElementById('instanceStatusText');
+        const gpuBadge = document.getElementById('gpuBadge');
         const btnStop = document.getElementById('btnStopInstance');
         const btnStart = document.getElementById('btnStartInstance');
         const rateTxt = document.getElementById('hourlyRateText');
 
+        renderExistingInstances(data.all_instances || [], document.getElementById('inputInstanceId').value.trim());
+
         if (data.error) {
-          txt.innerText = 'NO API KEY';
+          badge.className = 'status-indicator status-stopped';
+          txt.innerText = data.error.includes('API') ? 'NO API KEY' : 'NO INSTANCE';
+          gpuBadge.innerText = 'NO GPU';
+          btnStop.style.display = 'none';
+          btnStart.style.display = 'none';
+          rateTxt.innerText = '--';
           return;
         }
 
-        const status = (data.actual_status || data.cur_state || data.intended_status || '').toLowerCase();
-        const isRunning = data.actual_status === 'running';
-        const isTransitioning = (data.cur_state === 'running' && data.actual_status !== 'running') || data.actual_status === 'loading' || data.actual_status === 'starting';
-        const isStopped = !isRunning && !isTransitioning;
+        if (data.id && !document.getElementById('inputInstanceId').value.trim()) {
+          document.getElementById('inputInstanceId').value = String(data.id);
+        }
 
-        if (isRunning) {
+        const gpuName = data.gpu_name || 'GPU';
+        gpuBadge.innerText = gpuName;
+
+        const actual = (data.actual_status || '').toLowerCase();
+        const cur = (data.cur_state || '').toLowerCase();
+        const msg = (data.status_msg || '').toLowerCase();
+        const isStuck = actual.includes('scheduling') || cur.includes('scheduling') || msg.includes('in use');
+        const isRunning = actual === 'running';
+        const isStarting = !isRunning && !isStuck && (cur === 'running' || actual === 'loading' || actual === 'starting' || actual === 'creating');
+
+        if (isStuck) {
+          badge.className = 'status-indicator status-warn';
+          txt.innerText = 'GPU BUSY / SCHEDULING';
+          btnStop.style.display = 'none';
+          btnStart.style.display = 'none';
+        } else if (isRunning) {
           badge.className = 'status-indicator status-running';
-          txt.innerText = 'RUNNING ($0.409/hr)';
+          txt.innerText = `RUNNING (#${data.id})`;
           btnStop.style.display = 'inline-flex';
           btnStart.style.display = 'none';
-          btnStart.innerText = '▶ Start Instance';
           btnStart.disabled = false;
-        } else if (isTransitioning) {
-          badge.className = 'status-indicator status-stopped';
-          txt.innerText = 'STARTING... (BOOTING GPU)';
+        } else if (isStarting) {
+          badge.className = 'status-indicator status-warn';
+          txt.innerText = 'BOOTING GPU...';
           btnStop.style.display = 'none';
           btnStart.style.display = 'inline-flex';
-          btnStart.innerText = '⏳ Starting...';
           btnStart.disabled = true;
         } else {
           badge.className = 'status-indicator status-stopped';
-          txt.innerText = 'STOPPED (SAVING CREDITS)';
+          txt.innerText = `STOPPED (#${data.id || '-'})`;
           btnStop.style.display = 'none';
           btnStart.style.display = 'inline-flex';
-          btnStart.innerText = '▶ Start Instance';
           btnStart.disabled = false;
         }
 
         if (data.dph_total) {
-          const rateVal = parseFloat(data.dph_total);
-          rateTxt.innerText = `$${rateVal.toFixed(3)}/hr`;
-        } else if (isStopped) {
-          rateTxt.innerText = `$0.009/hr (Storage Only)`;
+          rateTxt.innerText = `$${parseFloat(data.dph_total).toFixed(3)}/hr`;
+        } else {
+          rateTxt.innerText = '--';
         }
       } catch (e) {
-        // Silent polling
+        console.error(e);
       }
     }
 
-    async function toggleInstance(action) {
-      const btnStart = document.getElementById('btnStartInstance');
-      const btnStop = document.getElementById('btnStopInstance');
-      
-      if (action === 'stop' && !confirm('Stop Vast.ai instance now to save credits?')) return;
-      
-      if (action === 'start') {
-        btnStart.innerText = '⏳ Starting...';
-        btnStart.disabled = true;
+    function renderExistingInstances(list, activeId) {
+      const wrap = document.getElementById('existingInstancesList');
+      wrap.innerHTML = '';
+      if (!list || list.length === 0) {
+        wrap.innerHTML = '<div style="font-size:12px;color:var(--text-dim);">No active instances in your Vast.ai account.</div>';
+        return;
       }
+      list.forEach(inst => {
+        const idStr = String(inst.id);
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border-color);border-radius:8px;background:rgba(255,255,255,0.02);';
+        const left = document.createElement('div');
+        const isActive = idStr === String(activeId);
+        const status = (inst.actual_status || inst.cur_state || 'unknown').toUpperCase();
+        const dph = inst.dph_total ? `$${parseFloat(inst.dph_total).toFixed(3)}/hr` : '-';
+        left.innerHTML = `<strong style="font-size:12px;">#${idStr} · ${inst.gpu_name || 'GPU'}</strong> `
+          + `<span style="font-size:11px;color:var(--text-muted);">(${status} · ${dph})</span>`
+          + (isActive ? ` <span class="badge badge-gpu" style="margin-left:4px;">ACTIVE</span>` : '');
 
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:6px;';
+        if (!isActive) {
+          const btnUse = document.createElement('button');
+          btnUse.className = 'btn btn-primary';
+          btnUse.textContent = 'Select';
+          btnUse.onclick = async () => {
+            await fetch('/api/instance_action', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'select', instance_id: idStr })
+            });
+            document.getElementById('inputInstanceId').value = idStr;
+            fetchInstanceStatus();
+          };
+          actions.appendChild(btnUse);
+        }
+        const btnDel = document.createElement('button');
+        btnDel.className = 'btn btn-danger';
+        btnDel.textContent = 'Destroy';
+        btnDel.onclick = async () => {
+          if (!confirm(`Permanently destroy instance #${idStr}?`)) return;
+          await fetch('/api/instance_action', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'destroy', instance_id: idStr })
+          });
+          fetchInstanceStatus();
+        };
+        actions.appendChild(btnDel);
+
+        row.appendChild(left);
+        row.appendChild(actions);
+        wrap.appendChild(row);
+      });
+    }
+
+    async function toggleInstance(action) {
+      if (action === 'stop' && !confirm('Stop Vast.ai instance now to save credits?')) return;
       try {
-        const res = await fetch('/api/instance_action', {
+        await fetch('/api/instance_action', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action })
         });
-        const result = await res.json();
-        
-        // Rapidly poll status for 30s while it starts
         let attempts = 0;
-        const interval = setInterval(async () => {
+        const timer = setInterval(async () => {
           attempts++;
           await fetchInstanceStatus();
-          const badge = document.getElementById('instanceStatusBadge');
-          if (badge.classList.contains('status-running') || attempts > 10) {
-            clearInterval(interval);
-          }
+          if (attempts >= 8) clearInterval(timer);
         }, 3000);
       } catch (e) {
         alert('Action error: ' + e);
-        fetchInstanceStatus();
-      }
-        fetchInstanceStatus();
-      } catch (e) {
-        alert('Failed: ' + e);
       }
     }
 
-    // Jobs & Frames polling
+    function openGpuModal() {
+      document.getElementById('gpuModal').classList.add('open');
+      fetchInstanceStatus();
+      searchGpus('RTX 5090,RTX 4090,RTX 3090,RTX 4080');
+    }
+
+    function closeGpuModal() {
+      document.getElementById('gpuModal').classList.remove('open');
+    }
+
+    async function searchGpus(models) {
+      const tbody = document.getElementById('gpuOffersBody');
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:18px;">Searching Vast.ai marketplace...</td></tr>';
+      try {
+        const res = await fetch(`/api/gpu_offers?models=${encodeURIComponent(models || 'ALL')}`);
+        const data = await res.json();
+        if (data.error) {
+          tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#fca5a5;padding:18px;">${data.error}</td></tr>`;
+          return;
+        }
+        cachedOffers = data.offers || [];
+        if (cachedOffers.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:18px;">No verified rentable offers matched that filter right now.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = '';
+        cachedOffers.forEach((o, idx) => {
+          const tr = document.createElement('tr');
+          const vramGb = o.gpu_ram ? `${Math.round(o.gpu_ram / 1024)} GB` : '-';
+          const dph = o.dph_total ? `$${parseFloat(o.dph_total).toFixed(3)}/hr` : '-';
+          const inet = `${Math.round(o.inet_down || 0)} Mbps`;
+          const loc = (o.geolocation || 'Unknown').slice(0, 22);
+          const rel = `${((o.reliability2 || 0) * 100).toFixed(1)}%`;
+
+          tr.innerHTML = `
+            <td><strong>${o.gpu_name || 'GPU'}</strong></td>
+            <td>${vramGb}</td>
+            <td style="color:#6ee7b7;font-family:'JetBrains Mono',monospace;">${dph}</td>
+            <td>${inet}</td>
+            <td>${loc}</td>
+            <td>${rel}</td>
+            <td></td>
+          `;
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-primary';
+          btn.textContent = 'Rent';
+          btn.onclick = () => rentOffer(o.id, idx, btn);
+          tr.lastElementChild.appendChild(btn);
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#fca5a5;padding:18px;">Search failed: ${e}</td></tr>`;
+      }
+    }
+
+    async function rentOffer(offerId, idx, btn) {
+      btn.disabled = true;
+      btn.textContent = 'Renting...';
+      const fallbacks = cachedOffers.slice(idx + 1, idx + 5).map(o => o.id);
+      const deleteOld = document.getElementById('chkDestroyOldOnRent').checked;
+      try {
+        const res = await fetch('/api/rent_gpu', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ offer_id: offerId, fallback_offers: fallbacks, delete_old: deleteOld })
+        });
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('inputInstanceId').value = data.instance_id;
+          closeGpuModal();
+          fetchInstanceStatus();
+        } else {
+          alert('Rent failed: ' + (data.error || 'Unknown error'));
+          btn.disabled = false;
+          btn.textContent = 'Rent';
+        }
+      } catch (e) {
+        alert('Error: ' + e);
+        btn.disabled = false;
+        btn.textContent = 'Rent';
+      }
+    }
+
+    async function pollState() {
+      try {
+        const res = await fetch('/api/state');
+        const st = await res.json();
+        latestState = st;
+
+        document.getElementById('tunnelStatusText').textContent = st.tunnel_ready ? st.tunnel_url : 'Starting Cloudflare tunnel...';
+        document.getElementById('workerStatusLabel').textContent = st.worker_status_text || 'Idle';
+        document.getElementById('frameReceivedCount').textContent = st.total_frames_received || 0;
+
+        const isBusy = Boolean(st.render_active || st.launch_in_progress);
+        document.getElementById('liveBadge').style.display = isBusy ? 'inline-flex' : 'none';
+        document.getElementById('liveBadgeText').textContent = st.launch_in_progress && !st.render_active ? 'LAUNCHING' : 'RENDERING LIVE';
+        document.getElementById('btnCancelLaunch').style.display = st.launch_in_progress ? 'inline-flex' : 'none';
+
+        if (st.cost && st.elapsed_seconds > 0) {
+          const idr = Math.round(st.cost.cost_idr || 0).toLocaleString('id-ID');
+          document.getElementById('sessionCostText').textContent = `$${(st.cost.cost_usd || 0).toFixed(4)} (Rp ${idr})`;
+        } else {
+          document.getElementById('sessionCostText').textContent = '$0.000 (Rp 0)';
+        }
+
+        const cmdBox = document.getElementById('txtCommand');
+        if (st.oneshot_command && document.activeElement !== cmdBox) {
+          cmdBox.value = st.oneshot_command;
+        }
+      } catch (e) {
+        // ignore transient poll error
+      }
+    }
+
+    async function pollLogs() {
+      try {
+        const res = await fetch(`/api/logs?since=${lastLogId}`);
+        const data = await res.json();
+        if (data.logs && data.logs.length > 0) {
+          const box = document.getElementById('consoleOutput');
+          data.logs.forEach(entry => {
+            const div = document.createElement('div');
+            if (entry.source === 'blender') div.className = 'log-line-blender';
+            else if (entry.source === 'frame') div.className = 'log-line-frame';
+            else if (entry.source === 'error') div.className = 'log-line-error';
+            else if (entry.source === 'cost') div.className = 'log-line-cost';
+            div.textContent = `[${entry.ts}] [${entry.source}] ${entry.text}`;
+            box.appendChild(div);
+          });
+          while (box.childElementCount > 600) {
+            box.removeChild(box.firstElementChild);
+          }
+          lastLogId = data.latest_id;
+          if (document.getElementById('chkAutoScroll').checked) {
+            box.scrollTop = box.scrollHeight;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    function clearConsole() {
+      document.getElementById('consoleOutput').innerHTML = '';
+    }
+
     async function fetchJobs() {
       try {
         const res = await fetch('/api/jobs');
         const jobList = await res.json();
         const sel = document.getElementById('jobSelector');
-        
         const prevVal = sel.value;
         sel.innerHTML = '';
-        jobList.forEach(j => {
+
+        if (!jobList || jobList.length === 0) {
           const opt = document.createElement('option');
-          opt.value = j;
-          opt.innerText = j;
+          opt.value = '';
+          opt.textContent = 'No renders yet';
+          sel.appendChild(opt);
+          currentJob = '';
+          return;
+        }
+
+        const names = jobList.map(j => (typeof j === 'string' ? j : j.name));
+        jobList.forEach(j => {
+          const name = typeof j === 'string' ? j : j.name;
+          const cnt = typeof j === 'object' && j.frame_count !== undefined ? ` (${j.frame_count} frames)` : '';
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name + cnt;
           sel.appendChild(opt);
         });
 
-        if (prevVal && jobList.includes(prevVal)) {
-          sel.value = prevVal;
-        } else if (jobList.length > 0) {
-          sel.value = jobList[0];
-        }
+        if (prevVal && names.includes(prevVal)) sel.value = prevVal;
+        else sel.value = names[0];
+
         currentJob = sel.value;
         fetchFrames();
       } catch (e) {
@@ -1125,7 +1331,6 @@
       try {
         const res = await fetch(`/api/frames?job=${encodeURIComponent(currentJob)}`);
         const frameList = await res.json();
-        
         const hadZero = frames.length === 0;
         const newFramesAdded = frameList.length > frames.length;
         frames = frameList;
@@ -1134,16 +1339,14 @@
         document.getElementById('frameCounter').innerText = `${frames.length > 0 ? currentFrameIndex + 1 : 0} / ${frames.length}`;
 
         if (frames.length > 0) {
-          document.getElementById('emptyState').style.display = 'none';
-          document.getElementById('mainImage').style.display = 'block';
           if (hadZero || (!isPlaying && newFramesAdded)) {
-            // Jump to latest frame if not actively playing
             showFrame(frames.length - 1);
           }
           renderFilmstrip();
         } else {
           document.getElementById('emptyState').style.display = 'flex';
           document.getElementById('mainImage').style.display = 'none';
+          document.getElementById('mainVideo').style.display = 'none';
         }
       } catch (e) {
         console.error(e);
@@ -1153,13 +1356,32 @@
     function showFrame(index) {
       if (index < 0 || index >= frames.length) return;
       currentFrameIndex = index;
+      const fname = frames[index];
+      const lower = fname.toLowerCase();
+      const url = `/renders/${encodeURIComponent(currentJob)}/${encodeURIComponent(fname)}`;
       const img = document.getElementById('mainImage');
-      img.src = `/renders/${encodeURIComponent(currentJob)}/${encodeURIComponent(frames[index])}`;
-      
+      const vid = document.getElementById('mainVideo');
+      const empty = document.getElementById('emptyState');
+
+      if (lower.endsWith('.mp4') || lower.endsWith('.mov')) {
+        img.style.display = 'none';
+        empty.style.display = 'none';
+        vid.style.display = 'block';
+        if (vid.getAttribute('src') !== url) vid.src = url;
+      } else if (lower.endsWith('.exr')) {
+        img.style.display = 'none';
+        vid.style.display = 'none';
+        empty.style.display = 'flex';
+        document.getElementById('emptyStateMsg').textContent = `EXR rendered: ${currentJob}/${fname} (open folder to view)`;
+      } else {
+        vid.style.display = 'none';
+        empty.style.display = 'none';
+        img.style.display = 'block';
+        img.src = url;
+      }
+
       document.getElementById('frameScrubber').value = index;
       document.getElementById('frameCounter').innerText = `${index + 1} / ${frames.length}`;
-
-      // Update filmstrip active state
       document.querySelectorAll('.thumb-item').forEach((el, idx) => {
         el.classList.toggle('active', idx === index);
       });
@@ -1167,55 +1389,46 @@
 
     function renderFilmstrip() {
       const container = document.getElementById('filmstrip');
-      // Only re-render if count changed to avoid DOM thrashing
       if (container.children.length === frames.length) return;
-      
       container.innerHTML = '';
       frames.forEach((f, idx) => {
         const div = document.createElement('div');
         div.className = `thumb-item ${idx === currentFrameIndex ? 'active' : ''}`;
         div.onclick = () => showFrame(idx);
-        
-        const img = document.createElement('img');
-        img.src = `/renders/${encodeURIComponent(currentJob)}/${encodeURIComponent(f)}`;
-        img.loading = 'lazy';
+
+        const lower = f.toLowerCase();
+        if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp')) {
+          const img = document.createElement('img');
+          img.src = `/renders/${encodeURIComponent(currentJob)}/${encodeURIComponent(f)}`;
+          img.loading = 'lazy';
+          div.appendChild(img);
+        } else {
+          const lbl = document.createElement('div');
+          lbl.style.cssText = 'font-size:10px;color:#9ca3af;display:flex;align-items:center;justify-content:center;height:100%;';
+          lbl.textContent = lower.split('.').pop().toUpperCase();
+          div.appendChild(lbl);
+        }
 
         const num = document.createElement('div');
         num.className = 'thumb-number';
         num.innerText = idx + 1;
-
-        div.appendChild(img);
         div.appendChild(num);
         container.appendChild(div);
       });
     }
 
-    function onScrub(val) {
-      pause();
-      showFrame(parseInt(val));
-    }
-
+    function onScrub(val) { pause(); showFrame(parseInt(val, 10)); }
     function stepFrame(step) {
+      if (frames.length === 0) return;
       pause();
       let next = currentFrameIndex + step;
       if (next < 0) next = frames.length - 1;
       if (next >= frames.length) next = 0;
       showFrame(next);
     }
+    function jumpToLatest() { pause(); if (frames.length > 0) showFrame(frames.length - 1); }
 
-    function jumpToLatest() {
-      pause();
-      showFrame(frames.length - 1);
-    }
-
-    function togglePlay() {
-      if (isPlaying) {
-        pause();
-      } else {
-        play();
-      }
-    }
-
+    function togglePlay() { isPlaying ? pause() : play(); }
     function play() {
       if (frames.length === 0) return;
       isPlaying = true;
@@ -1227,23 +1440,19 @@
         showFrame(next);
       }, 1000 / fps);
     }
-
     function pause() {
       isPlaying = false;
       document.getElementById('btnPlayPause').innerText = '▶';
       clearInterval(playInterval);
     }
-
-    function setFps(newFps) {
-      fps = parseInt(newFps);
-      if (isPlaying) play();
-    }
+    function setFps(newFps) { fps = parseInt(newFps, 10); if (isPlaying) play(); }
 
     function onJobChange() {
       currentJob = document.getElementById('jobSelector').value;
       frames = [];
       currentFrameIndex = 0;
       pause();
+      document.getElementById('filmstrip').innerHTML = '';
       fetchFrames();
     }
 
@@ -1253,46 +1462,47 @@
 
     function toggleFullscreen() {
       const vp = document.getElementById('viewport');
-      if (!document.fullscreenElement) {
-        vp.requestFullscreen().catch(err => alert(err.message));
-      } else {
-        document.exitFullscreen();
-      }
+      if (!document.fullscreenElement) vp.requestFullscreen().catch(err => alert(err.message));
+      else document.exitFullscreen();
     }
 
     function toggleConfigDrawer() {
-      const card = document.getElementById('configCard');
-      card.scrollIntoView({ behavior: 'smooth' });
+      document.getElementById('configCard').scrollIntoView({ behavior: 'smooth' });
     }
 
     async function testInstanceConnection() {
       await saveConfig();
-      fetchInstanceStatus();
-      alert('Config saved and instance status refreshed!');
+      await fetchInstanceStatus();
     }
 
-    // Keyboard Shortcuts
+    async function quitApp() {
+      if (!confirm('Close VastAI Render Hub and stop local tunnel?')) return;
+      try {
+        await fetch('/api/quit', { method: 'POST' });
+      } catch (e) {}
+      window.close();
+    }
+
     window.addEventListener('keydown', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-      if (e.code === 'Space') {
-        e.preventDefault();
-        togglePlay();
-      } else if (e.code === 'ArrowLeft') {
-        stepFrame(-1);
-      } else if (e.code === 'ArrowRight') {
-        stepFrame(1);
-      }
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+      else if (e.code === 'ArrowLeft') stepFrame(-1);
+      else if (e.code === 'ArrowRight') stepFrame(1);
     });
 
-    // Init
+    // Initial bootstrap + loops
     loadConfig();
     loadJobConfig();
     fetchJobs();
     fetchInstanceStatus();
+    pollState();
+    pollLogs();
 
-    // Auto-refresh loops
+    setInterval(pollState, 2000);
+    setInterval(pollLogs, 1200);
     setInterval(fetchJobs, 3000);
     setInterval(fetchInstanceStatus, 15000);
+    setInterval(() => fetch('/api/heartbeat', { method: 'POST' }).catch(() => {}), 5000);
   </script>
 </body>
 </html>

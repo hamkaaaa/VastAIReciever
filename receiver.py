@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 """
-Vast.ai Blender Render Receiver CLI
-Interactive terminal application for managing renders, streaming frames live, and auto-stopping your instance.
+Vast.ai Blender 5.2 LTS Render Hub (Desktop GUI & CLI Receiver)
+Splits the public Cloudflare-tunneled worker receiver (port 8888, token-gated)
+from the strictly local GUI server (127.0.0.1:8889), provides GPU marketplace
+rent/start/stop/destroy APIs, native Windows file pickers, live log streaming,
+and idle auto-stop protection.
 """
 
 import os
 import sys
 import re
+import io
 import json
 import time
 import shutil
+import secrets
 import zipfile
 import argparse
 import threading
 import subprocess
 import urllib.parse
 import urllib.request
+from collections import deque
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
@@ -24,47 +30,132 @@ try:
 except ImportError:
     msvcrt = None
 
+APP_VERSION = "VastRenderHub 2.0 (Blender 5.2 LTS)"
+
+IS_FROZEN = getattr(sys, "frozen", False)
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+APP_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else Path(__file__).resolve().parent
+
+OUTPUT_DIR = APP_DIR / "renders"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_FILE = APP_DIR / ".vast_config.json"
+CACHE_DIR = APP_DIR / ".cache"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = APP_DIR / "vast_render_hub.log"
+
+SUBPROC_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+# Ensure stdio is never None in --noconsole PyInstaller builds
+if sys.stdout is None:
+    sys.stdout = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+if sys.stderr is None:
+    sys.stderr = sys.stdout
+
+WORKER_TOKEN = secrets.token_hex(16)
+
+# Thread-safe state and locks
+state_lock = threading.Lock()
+log_lock = threading.Lock()
+browse_lock = threading.Lock()
+shutdown_event = threading.Event()
+launch_cancel_event = threading.Event()
+
+log_buffer = deque(maxlen=1000)
+log_seq = 0
+
+total_frames_received = 0
+active_job_name = ""
+last_activity_time = time.time()
+last_gui_heartbeat = time.time()
+gui_ever_connected = False
+vast_boot_time = None
+
+current_tunnel_url = ""
+tunnel_proc = None
+worker_connected = False
+worker_status_text = "Idle"
+render_active = False
+launch_in_progress = False
+active_ssh_proc = None
+
+current_project_file = None
+current_project_type = None
+current_addons_zip = None
+pending_daemon_job = None
+
+current_job_config = {
+    "source_type": "gdrive",
+    "gdrive_url": "",
+    "project_path": "",
+    "blend_in_zip": "",
+    "zip_blend_files": [],
+    "vast_blend_path": "",
+    "addon_paths": [],
+    "render_mode": "all",
+    "start_frame": "",
+    "end_frame": "",
+    "single_frame": "",
+    "samples": "",
+    "denoise": True,
+    "persistent_data": True,
+    "use_simplify": False,
+    "simplify_subdiv": 2,
+    "exec_all_scripts": True,
+    "force_cycles": True,
+    "project_revision": 0,
+}
+
+cached_instance_info = {}
+cached_idr_rate = {"value": 17800.0, "ts": 0.0}
+
+
+def add_log(msg, source="system"):
+    global log_seq
+    ts = time.strftime("%H:%M:%S")
+    lines = str(msg).splitlines() or [""]
+    with log_lock:
+        for line in lines:
+            log_seq += 1
+            entry = {"id": log_seq, "ts": ts, "source": source, "text": line}
+            log_buffer.append(entry)
+    try:
+        print(f"[{ts}] [{source}] {msg}", flush=True)
+    except Exception:
+        pass
+
+
 class ThreadedReceiverServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
     def handle_error(self, request, client_address):
-        # Silently absorb socket disconnections from client/tunnel
         exc_type, _, _ = sys.exc_info()
         if exc_type in (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError, OSError):
             return
         super().handle_error(request, client_address)
 
-BASE_DIR = Path(__file__).parent
-OUTPUT_DIR = BASE_DIR / "renders"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-CONFIG_FILE = BASE_DIR / ".vast_config.json"
 
-total_frames_received = 0
-active_job_name = ""
-last_activity_time = time.time()
-vast_boot_time = None
-server_running = True
+def load_config():
+    defaults = {
+        "api_key": "",
+        "instance_id": "",
+        "auto_stop": True,
+        "idle_stop": True,
+        "idle_minutes": 10,
+    }
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                defaults.update(data)
+        except Exception:
+            pass
+    return defaults
 
-current_project_file = None
-current_project_type = None
-current_gdrive_url = ""
 
-def package_folder_to_zip(folder_path):
-    cache_dir = BASE_DIR / ".cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = cache_dir / f"{folder_path.name}.zip"
-    print(f"\n[*] Mengompres folder '{folder_path.name}' menjadi '{zip_path.name}'...")
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for root, dirs, files in os.walk(folder_path):
-            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".vscode")]
-            for file in files:
-                file_p = Path(root) / file
-                arcname = file_p.relative_to(folder_path)
-                zipf.write(file_p, arcname)
-    size_mb = zip_path.stat().st_size / (1024 * 1024)
-    print(f"[✓] Kompresi selesai: {zip_path.name} ({size_mb:.1f} MB)")
-    return zip_path
+def save_config(cfg):
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
 
 def record_vast_boot_time(ts=None):
     global vast_boot_time
@@ -75,7 +166,8 @@ def record_vast_boot_time(ts=None):
     cfg["last_boot_time"] = ts
     save_config(cfg)
     boot_str = time.strftime("%H:%M:%S", time.localtime(ts))
-    print(f"[*] ⏱️ Vast.ai session timer started at {boot_str}")
+    add_log(f"Vast.ai session timer started at {boot_str}", "cost")
+
 
 def clear_vast_boot_time():
     global vast_boot_time
@@ -84,30 +176,6 @@ def clear_vast_boot_time():
     cfg.pop("last_boot_time", None)
     save_config(cfg)
 
-current_job_config = {
-    "start_frame": "",
-    "end_frame": "",
-    "single_frame": "",
-    "samples": 128,
-    "denoise": True
-}
-current_tunnel_url = ""
-
-def load_config():
-    if CONFIG_FILE.exists():
-        try:
-            return json.loads(CONFIG_FILE.read_text())
-        except Exception:
-            pass
-    return {
-        "api_key": "",
-        "instance_id": "54816424",
-        "auto_stop": True,
-        "idle_stop": True
-    }
-
-def save_config(cfg):
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
 
 def call_vast_api(endpoint, method="GET", data=None):
     cfg = load_config()
@@ -115,7 +183,7 @@ def call_vast_api(endpoint, method="GET", data=None):
     if not api_key:
         return {"error": "No Vast.ai API key configured"}
 
-    clean_endpoint = endpoint.lstrip('/')
+    clean_endpoint = endpoint.lstrip("/")
     if clean_endpoint.startswith("v1/"):
         url = f"https://console.vast.ai/api/{clean_endpoint}"
     else:
@@ -123,7 +191,7 @@ def call_vast_api(endpoint, method="GET", data=None):
 
     headers = {
         "Accept": "application/json",
-        "Authorization": f"Bearer {api_key}"
+        "Authorization": f"Bearer {api_key}",
     }
 
     req_data = None
@@ -133,95 +201,120 @@ def call_vast_api(endpoint, method="GET", data=None):
 
     try:
         req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode())
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            return json.loads(raw) if raw.strip() else {"success": True}
     except urllib.error.HTTPError as e:
-        return {"error": f"HTTP {e.code}: {e.read().decode()}"}
+        return {"error": f"HTTP {e.code}: {e.read().decode('utf-8', errors='replace')}"}
     except Exception as e:
         return {"error": str(e)}
 
+
 def get_all_user_instances():
-    """Fetches all instances belonging to user's account via /api/v1/instances/"""
     res = call_vast_api("v1/instances/")
     if isinstance(res, dict) and "instances" in res:
         return res["instances"] or []
     return []
 
-def get_instance_info():
+
+def get_instance_info(auto_discover=True):
+    global cached_instance_info
     cfg = load_config()
-    api_key = cfg.get("api_key")
-    if not api_key:
+    if not cfg.get("api_key", "").strip():
         return None
 
-    inst_id = cfg.get("instance_id")
-    # 1. Try checking the configured instance_id
+    inst_id = str(cfg.get("instance_id", "")).strip()
     if inst_id:
         res = call_vast_api(f"instances/{inst_id}/")
         info = None
         if isinstance(res, dict):
             if isinstance(res.get("instances"), dict):
                 info = res["instances"]
-            elif "actual_status" in res:
+            elif "actual_status" in res or "id" in res:
                 info = res
-        if info and info.get("actual_status"):
+        if info and (info.get("actual_status") or info.get("cur_state")):
+            cached_instance_info = info
             return info
 
-    # 2. Auto-discover active instances from the user's account
-    all_instances = get_all_user_instances()
-    if all_instances:
-        running_inst = [i for i in all_instances if str(i.get("actual_status", "")).lower() == "running"]
-        chosen = running_inst[0] if running_inst else all_instances[0]
-        chosen_id = str(chosen["id"])
-        gpu_name = chosen.get("gpu_name", "GPU")
-        status_name = chosen.get("actual_status", "").upper()
-        print(f"[+] 🔍 Terdeteksi instance aktif di akun Vast.ai: #{chosen_id} ({gpu_name} - 🟢 {status_name})")
-        cfg["instance_id"] = chosen_id
-        save_config(cfg)
-        return chosen
+    if auto_discover:
+        all_instances = get_all_user_instances()
+        if all_instances:
+            running_inst = [i for i in all_instances if str(i.get("actual_status", "")).lower() == "running"]
+            chosen = running_inst[0] if running_inst else all_instances[0]
+            chosen_id = str(chosen["id"])
+            gpu_name = chosen.get("gpu_name", "GPU")
+            status_name = str(chosen.get("actual_status", "")).upper()
+            add_log(f"Auto-selected Vast.ai instance #{chosen_id} ({gpu_name} - {status_name})", "vast")
+            cfg["instance_id"] = chosen_id
+            save_config(cfg)
+            cached_instance_info = chosen
+            return chosen
 
     return None
 
-def stop_instance_api():
+
+def stop_instance_api(instance_id=None):
     cfg = load_config()
-    inst_id = cfg.get("instance_id", "").strip()
+    inst_id = str(instance_id or cfg.get("instance_id", "")).strip()
     if not inst_id:
-        return
-    print(f"\n[💰 Cost Saver] Triggering shutdown for Vast.ai Instance {inst_id}...")
+        return {"error": "No instance ID configured"}
+    add_log(f"Stopping Vast.ai Instance #{inst_id}...", "vast")
     res = call_vast_api(f"instances/{inst_id}/", method="PUT", data={"state": "stopped"})
     if "error" in res or res.get("success") is False:
         res = call_vast_api(f"instances/{inst_id}/stop/", method="POST")
-    print(f"[💰 Cost Saver] Instance {inst_id} has been STOPPED. GPU billing ceased.")
     clear_vast_boot_time()
+    add_log(f"Instance #{inst_id} STOPPED (GPU billing ceased).", "vast")
+    return res
 
-def start_instance_api():
+
+def start_instance_api(instance_id=None):
     cfg = load_config()
-    inst_id = cfg.get("instance_id", "").strip()
+    inst_id = str(instance_id or cfg.get("instance_id", "")).strip()
     if not inst_id:
-        return
-    print(f"\n[*] Starting Vast.ai Instance {inst_id}...")
+        return {"error": "No instance ID configured"}
+    add_log(f"Starting Vast.ai Instance #{inst_id}...", "vast")
     record_vast_boot_time(time.time())
     res = call_vast_api(f"instances/{inst_id}/", method="PUT", data={"state": "running"})
     if "error" in res or res.get("success") is False:
         res = call_vast_api(f"instances/{inst_id}/start/", method="POST")
-    print(f"[✓] Start command sent to Vast.ai (Booting GPU container...)")
+    return res
+
+
+def destroy_instance_api(instance_id):
+    inst_id = str(instance_id).strip()
+    if not inst_id:
+        return {"error": "No instance ID specified"}
+    add_log(f"Destroying Vast.ai Instance #{inst_id}...", "vast")
+    res = call_vast_api(f"instances/{inst_id}/", method="DELETE")
+    cfg = load_config()
+    if str(cfg.get("instance_id", "")) == inst_id:
+        cfg["instance_id"] = ""
+        save_config(cfg)
+        clear_vast_boot_time()
+    return res
+
 
 def ensure_ssh_key_registered():
-    """Ensures local ed25519 SSH key exists and is uploaded to Vast.ai account"""
     ssh_dir = Path.home() / ".ssh"
     ssh_dir.mkdir(parents=True, exist_ok=True)
     key_path = ssh_dir / "id_ed25519"
     pub_path = ssh_dir / "id_ed25519.pub"
 
     if not key_path.exists():
-        print("[*] Membuat SSH key lokal untuk koneksi otomatis...")
-        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        add_log("Generating local ed25519 SSH key for automated Vast.ai access...", "ssh")
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=SUBPROC_FLAGS,
+        )
 
     if pub_path.exists():
-        pub_key = pub_path.read_text().strip()
+        pub_key = pub_path.read_text(encoding="utf-8", errors="ignore").strip()
         call_vast_api("ssh/", method="POST", data={"ssh_key": pub_key})
 
-def search_available_gpus(gpu_names=("RTX 5090", "RTX 4090", "RTX 3090", "RTX 4080"), max_results=12):
-    """Searches available, verified, immediately rentable GPUs on Vast.ai"""
+
+def search_available_gpus(gpu_names=("RTX 5090", "RTX 4090", "RTX 3090", "RTX 4080"), max_results=20):
     query_payload = {
         "rentable": {"eq": True},
         "verified": {"eq": True},
@@ -232,146 +325,275 @@ def search_available_gpus(gpu_names=("RTX 5090", "RTX 4090", "RTX 3090", "RTX 40
     encoded_q = urllib.parse.quote(json.dumps(query_payload))
     res = call_vast_api(f"bundles/?q={encoded_q}")
     if isinstance(res, dict) and "offers" in res:
-        offers = res["offers"]
+        offers = res["offers"] or []
         offers.sort(key=lambda o: (o.get("dph_total", 999), -o.get("reliability2", 0)))
         return offers[:max_results]
     return []
 
-def prompt_gpu_model_selection():
-    """Lets user pick which GPU model(s) to search for on Vast.ai"""
-    print("\n--- 🎮 PILIH TIPE GPU VAST.AI ---")
-    print("[1] Semua GPU Terbaik (RTX 5090 / 4090 / 4080 / 3090 - Campuran Termurah)")
-    print("[2] Khusus NVIDIA RTX 5090 (32 GB VRAM - Tercepat)")
-    print("[3] Khusus NVIDIA RTX 4090 (24 GB VRAM - Sangat Cepat & Populer)")
-    print("[4] Khusus NVIDIA RTX 3090 / 3090 Ti (24 GB VRAM - Hemat Biaya)")
-    print("[5] Khusus NVIDIA RTX 4080 / 4080S / 4070 Ti (16 GB VRAM)")
-    print("[6] Ketik nama GPU manual (contoh: RTX A6000, L40S, H100)")
 
-    g_opt = input("Pilih tipe GPU [Default: 1]: ").strip() or "1"
-    if g_opt == "2":
-        return ("RTX 5090",)
-    elif g_opt == "3":
-        return ("RTX 4090", "RTX 4090D")
-    elif g_opt == "4":
-        return ("RTX 3090", "RTX 3090 Ti")
-    elif g_opt == "5":
-        return ("RTX 4080", "RTX 4080S", "RTX 4070 Ti")
-    elif g_opt == "6":
-        custom_gpu = input("Masukkan nama GPU (pisahkan koma jika lebih dari 1): ").strip()
-        if custom_gpu:
-            return tuple(x.strip() for x in custom_gpu.split(",") if x.strip())
-    return ("RTX 5090", "RTX 4090", "RTX 4080", "RTX 3090")
-
-def display_and_rent_gpu_flow():
-    """Displays immediately rentable GPUs, lets user pick or auto-selects, rents it with auto-retry, and updates config"""
-    while True:
-        selected_gpu_models = prompt_gpu_model_selection()
-        print("\n" + "=" * 75)
-        print(f" 🔍 MENCARI GPU ({', '.join(selected_gpu_models)}) YANG SIAP DISEWA DI VAST.AI...")
-        print("=" * 75)
-        offers = search_available_gpus(gpu_names=selected_gpu_models, max_results=10)
-        if not offers:
-            print(f"[!] Tidak ada {', '.join(selected_gpu_models)} yang sedang kosong saat ini.")
-            retry_other = input("Coba pilih tipe GPU lain? [Y/n]: ").strip().lower()
-            if retry_other != "n":
-                continue
-            return None
-
-        print(f"\n{'#':<4} {'GPU':<14} {'VRAM':<8} {'Harga/Jam':<12} {'Internet':<12} {'Lokasi':<16} {'Reliab.':<10}")
-        print("-" * 80)
-        for idx, o in enumerate(offers):
-            gpu = o.get("gpu_name", "GPU")
-            vram_gb = int(round(float(o.get("gpu_ram", 0)) / 1024.0)) if o.get("gpu_ram") else 0
-            vram_str = f"{vram_gb}GB" if vram_gb > 0 else "-"
-            dph = o.get("dph_total", 0)
-            inet = f"{int(o.get('inet_down', 0))} Mbps"
-            loc = (o.get("geolocation") or "Unknown")[:15]
-            rel = f"{float(o.get('reliability2', 0))*100:.1f}%"
-            badge = " [🔥 Termurah]" if idx == 0 else ""
-            print(f"[{idx+1:<2}] {gpu:<14} {vram_str:<8} ${dph:<10.3f} {inet:<12} {loc:<16} {rel:<10}{badge}")
-        print("-" * 80)
-
-        choice = input("\nPilih nomor GPU untuk disewa (atau ketik 'g' untuk ganti tipe GPU) [Default: 1]: ").strip() or "1"
-        if choice.lower() == "g":
-            continue
-        try:
-            selected_idx = int(choice) - 1
-            if not (0 <= selected_idx < len(offers)):
-                selected_idx = 0
-        except ValueError:
-            selected_idx = 0
-        break
-
+def rent_gpu_offer(offer_id, fallback_ids=None, delete_old=False):
     ensure_ssh_key_registered()
-
     create_payload = {
         "image": "vastai/linux-desktop:cuda-12.9-ubuntu24.04-2026-06-16",
         "disk": 32,
         "runtype": "jupyter_direc ssh_direc ssh_proxy",
-        "template_hash_id": "07fd4c405aef10347e8cac7b04453021"
+        "template_hash_id": "07fd4c405aef10347e8cac7b04453021",
+    }
+    queue = [offer_id] + [oid for oid in (fallback_ids or []) if str(oid) != str(offer_id)]
+    last_err = "Offer unavailable"
+
+    for cand_id in queue:
+        add_log(f"Attempting to rent Vast.ai offer #{cand_id}...", "vast")
+        res = call_vast_api(f"asks/{cand_id}/", method="PUT", data=create_payload)
+        new_id = res.get("new_contract") or res.get("id")
+        if new_id:
+            cfg = load_config()
+            old_id = str(cfg.get("instance_id", "")).strip()
+            if delete_old and old_id and old_id != str(new_id):
+                destroy_instance_api(old_id)
+            cfg["instance_id"] = str(new_id)
+            save_config(cfg)
+            record_vast_boot_time(time.time())
+            add_log(f"Successfully rented instance #{new_id}!", "vast")
+            return {"success": True, "instance_id": str(new_id)}
+        last_err = res.get("error") or str(res)
+        add_log(f"Offer #{cand_id} unavailable: {last_err}", "vast")
+
+    return {"success": False, "error": last_err}
+
+
+def get_usd_to_idr_rate():
+    now = time.time()
+    if now - cached_idr_rate["ts"] < 1800 and cached_idr_rate["value"] > 0:
+        return cached_idr_rate["value"]
+    try:
+        req = urllib.request.Request("https://open.er-api.com/v6/latest/USD", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            rate = float(data.get("rates", {}).get("IDR", 17800.0))
+            cached_idr_rate["value"] = rate
+            cached_idr_rate["ts"] = now
+            return rate
+    except Exception:
+        return cached_idr_rate["value"]
+
+
+def compute_cost_metrics(elapsed_seconds):
+    hourly_rate = 0.0
+    if cached_instance_info and cached_instance_info.get("dph_total"):
+        try:
+            hourly_rate = float(cached_instance_info["dph_total"])
+        except Exception:
+            pass
+    if hourly_rate <= 0:
+        hourly_rate = 0.409
+    cost_usd = (max(0.0, elapsed_seconds) / 3600.0) * hourly_rate
+    idr_rate = get_usd_to_idr_rate()
+    cost_idr = cost_usd * idr_rate
+    return {
+        "hourly_rate": hourly_rate,
+        "idr_rate": idr_rate,
+        "cost_usd": cost_usd,
+        "cost_idr": cost_idr,
     }
 
-    # Queue candidates to try starting with selected choice
-    queue = [offers[selected_idx]] + [o for i, o in enumerate(offers) if i != selected_idx]
-    new_inst_id = None
-    chosen_offer = None
 
-    for attempt_idx, candidate in enumerate(queue):
-        cand_id = candidate["id"]
-        cand_gpu = candidate.get("gpu_name", "GPU")
-        cand_dph = candidate.get("dph_total", 0.409)
-        print(f"\n[*] [{attempt_idx + 1}/{len(queue)}] Menyewa {cand_gpu} (Offer #{cand_id} | ${cand_dph:.3f}/jam)...")
-        res = call_vast_api(f"asks/{cand_id}/", method="PUT", data=create_payload)
-        new_inst_id = res.get("new_contract") or res.get("id")
+def calculate_and_display_cost(elapsed_seconds, boot_time=None, stop_time=None):
+    inst_info = get_instance_info(auto_discover=False)
+    if inst_info:
+        cached_instance_info.update(inst_info)
+    metrics = compute_cost_metrics(elapsed_seconds)
+    hrs = int(elapsed_seconds // 3600)
+    mins = int((elapsed_seconds % 3600) // 60)
+    secs = int(elapsed_seconds % 60)
+    time_str = f"{hrs}h {mins}m {secs}s" if hrs > 0 else (f"{mins}m {secs}s" if mins > 0 else f"{secs}s")
+    formatted_idr = f"Rp {int(round(metrics['cost_idr'])):,}".replace(",", ".")
+    add_log(
+        f"Job finished | Duration: {time_str} | Rate: ${metrics['hourly_rate']:.3f}/hr | "
+        f"Cost: ${metrics['cost_usd']:.4f} ({formatted_idr})",
+        "cost",
+    )
 
-        if new_inst_id:
-            chosen_offer = candidate
-            print(f"[✓] SUKSES! Berhasil menyewa {cand_gpu} (Instance ID: {new_inst_id})!")
-            break
+
+def inspect_zip_blend_files(zip_path):
+    blends = []
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                if info.filename.lower().endswith(".blend") and "__MACOSX" not in info.filename and not Path(info.filename).name.startswith("._"):
+                    blends.append({"name": info.filename, "size": info.file_size})
+        blends.sort(key=lambda x: x["size"], reverse=True)
+    except Exception:
+        pass
+    return [b["name"] for b in blends]
+
+
+def package_folder_to_zip(folder_path):
+    zip_path = CACHE_DIR / f"{folder_path.name}.zip"
+    add_log(f"Compressing project folder '{folder_path.name}' to '{zip_path.name}'...", "project")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(folder_path):
+            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".vscode")]
+            for file in files:
+                file_p = Path(root) / file
+                arcname = file_p.relative_to(folder_path)
+                zipf.write(file_p, arcname)
+    size_mb = zip_path.stat().st_size / (1024 * 1024)
+    add_log(f"Compressed {zip_path.name} ({size_mb:.1f} MB)", "project")
+    return zip_path
+
+
+def prepare_local_bundles_from_config():
+    global current_project_file, current_project_type, current_addons_zip
+    with state_lock:
+        cfg = dict(current_job_config)
+
+    src_type = cfg.get("source_type", "gdrive")
+    proj_path_str = (cfg.get("project_path") or "").strip().strip('"\'')
+
+    if src_type == "pc_upload" and proj_path_str:
+        p = Path(proj_path_str)
+        if not p.exists():
+            return False, f"Project path not found: {p}"
+        if p.is_dir():
+            zip_p = package_folder_to_zip(p)
+            current_project_file = zip_p
+            current_project_type = "zip"
+            with state_lock:
+                current_job_config["zip_blend_files"] = inspect_zip_blend_files(zip_p)
+        elif p.suffix.lower() == ".zip":
+            current_project_file = p
+            current_project_type = "zip"
+            with state_lock:
+                current_job_config["zip_blend_files"] = inspect_zip_blend_files(p)
+        elif p.suffix.lower() == ".blend":
+            current_project_file = p
+            current_project_type = "blend"
         else:
-            err_msg = res.get("error") or str(res)
-            print(f"[!] Offer #{cand_id} tidak tersedia / diambil pengguna lain: {err_msg}")
-            print("[*] 🔄 Otomatis mencoba opsi GPU terbaik berikutnya...")
-            time.sleep(1)
+            return False, f"Unsupported project format: {p.suffix}"
+    elif src_type != "pc_upload":
+        current_project_file = None
+        current_project_type = None
 
-    # If all in initial queue failed, refresh offers once and retry
-    if not new_inst_id:
-        print("\n[*] Menyegarkan penawaran GPU terbaru dari Vast.ai...")
-        fresh_offers = search_available_gpus(gpu_names=selected_gpu_models, max_results=6)
-        for candidate in fresh_offers:
-            cand_id = candidate["id"]
-            cand_gpu = candidate.get("gpu_name", "GPU")
-            cand_dph = candidate.get("dph_total", 0.409)
-            print(f"[*] Mencoba menyewa {cand_gpu} (Offer #{cand_id} | ${cand_dph:.3f}/jam)...")
-            res = call_vast_api(f"asks/{cand_id}/", method="PUT", data=create_payload)
-            new_inst_id = res.get("new_contract") or res.get("id")
-            if new_inst_id:
-                chosen_offer = candidate
-                print(f"[✓] SUKSES! Berhasil menyewa {cand_gpu} (Instance ID: {new_inst_id})!")
-                break
-            time.sleep(1)
+    addon_paths = [Path(x) for x in (cfg.get("addon_paths") or []) if x and Path(x).is_file()]
+    if addon_paths:
+        bundle_zip = CACHE_DIR / "addons_bundle.zip"
+        with zipfile.ZipFile(bundle_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            for ap in addon_paths:
+                zf.write(ap, ap.name)
+        current_addons_zip = bundle_zip
+        add_log(f"Packaged {len(addon_paths)} Blender add-on(s) for upload.", "project")
+    else:
+        current_addons_zip = None
 
-    if not new_inst_id:
-        print("[!] Semua penawaran GPU saat ini gagal disewa. Silakan coba kembali beberapa saat lagi.")
-        return None
+    return True, ""
 
-    cfg = load_config()
-    old_id = cfg.get("instance_id")
-    if old_id and str(old_id) != str(new_inst_id):
-        del_choice = input(f"Hapus instance lama ({old_id}) yang terkunci agar tidak kena biaya disk? [Y/n]: ").strip().lower()
-        if del_choice != "n":
-            call_vast_api(f"instances/{old_id}/", method="DELETE")
-            print(f"[✓] Instance lama {old_id} berhasil dihapus.")
 
-    cfg["instance_id"] = str(new_inst_id)
-    save_config(cfg)
-    return str(new_inst_id)
+def build_vast_worker_command(daemon=False):
+    with state_lock:
+        cfg = dict(current_job_config)
+    tunnel = current_tunnel_url or "http://localhost:8888"
+    flags = f"--server {tunnel} --token {WORKER_TOKEN}"
+    if daemon:
+        flags = f"--daemon {flags}"
+    mode = cfg.get("render_mode", "all")
+    sf = str(cfg.get("single_frame", "")).strip()
+    s = str(cfg.get("start_frame", "")).strip()
+    e = str(cfg.get("end_frame", "")).strip()
+    if mode == "single" and sf:
+        flags += f" --single {sf}"
+    elif mode == "range" and s and e:
+        flags += f" --start {s} --end {e}"
+    return f"curl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- {flags}"
 
-def wait_for_instance_running(inst_id, timeout=180):
-    """Waits until the instance status is RUNNING and SSH is ready"""
-    print(f"[*] Menunggu instance #{inst_id} booting dan siap...")
+
+def find_or_install_cloudflared():
+    candidates = [
+        APP_DIR / "cloudflared.exe",
+        APP_DIR.parent / "cloudflared.exe",
+        RESOURCE_DIR / "cloudflared.exe",
+        shutil.which("cloudflared"),
+        shutil.which("cloudflared.exe"),
+    ]
+    for c in candidates:
+        if c and Path(c).is_file():
+            return str(Path(c))
+        if c and shutil.which(str(c)):
+            return str(c)
+
+    if os.name == "nt":
+        target = APP_DIR / "cloudflared.exe"
+        url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+        add_log("cloudflared.exe not found locally. Downloading official Cloudflare Tunnel binary...", "tunnel")
+        try:
+            urllib.request.urlretrieve(url, target)
+            if target.is_file() and target.stat().st_size > 1_000_000:
+                add_log("Downloaded cloudflared.exe successfully.", "tunnel")
+                return str(target)
+        except Exception as e:
+            add_log(f"Failed to download cloudflared.exe: {e}", "tunnel")
+    return None
+
+
+def start_cloudflare_tunnel():
+    global current_tunnel_url, tunnel_proc
+    cf_bin = find_or_install_cloudflared()
+    if not cf_bin:
+        add_log("cloudflared binary unavailable; tunnel disabled.", "tunnel")
+        return None, ""
+
+    cmd = [cf_bin, "tunnel", "--url", "http://127.0.0.1:8888"]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        creationflags=SUBPROC_FLAGS,
+    )
+    tunnel_proc = proc
+
+    found_url = ""
+    start_t = time.time()
+    for line in iter(proc.stdout.readline, ""):
+        m = re.search(r'(https://[a-zA-Z0-9\-\.]+\.trycloudflare\.com)', line)
+        if m:
+            found_url = m.group(1)
+            break
+        if time.time() - start_t > 25 or shutdown_event.is_set():
+            break
+
+    def _drain():
+        try:
+            for _ in iter(proc.stdout.readline, ""):
+                if shutdown_event.is_set():
+                    break
+        except Exception:
+            pass
+
+    threading.Thread(target=_drain, daemon=True).start()
+    current_tunnel_url = found_url
+    if found_url:
+        add_log(f"Cloudflare tunnel active: {found_url}", "tunnel")
+    else:
+        add_log("Cloudflare tunnel timed out.", "tunnel")
+    return proc, found_url
+
+
+def ensure_tunnel_async():
+    if current_tunnel_url:
+        return
+    threading.Thread(target=start_cloudflare_tunnel, daemon=True).start()
+
+
+def wait_for_instance_running(inst_id, timeout=180, cancel_event=None):
+    add_log(f"Waiting for instance #{inst_id} to reach RUNNING + SSH ready...", "vast")
     start_t = time.time()
     while time.time() - start_t < timeout:
+        if cancel_event and cancel_event.is_set():
+            return None
         res = call_vast_api(f"instances/{inst_id}/")
         info = {}
         if isinstance(res, dict):
@@ -379,161 +601,197 @@ def wait_for_instance_running(inst_id, timeout=180):
                 info = res["instances"]
             elif "actual_status" in res:
                 info = res
-
-        if not info:
-            print(f"\n[!] Instance #{inst_id} tidak ditemukan atau sudah dihapus di Vast.ai.")
-            rent_in = input("Sewa GPU baru yang langsung KOSONG & SIAP PAKAI sekarang? [Y/n]: ").strip().lower()
-            if rent_in != "n":
-                new_id = display_and_rent_gpu_flow()
-                if new_id:
-                    return wait_for_instance_running(new_id, timeout=timeout)
-            return None
-
-        status = str(info.get("actual_status", "")).lower()
-        cur_state = str(info.get("cur_state", "")).lower()
-        status_msg = str(info.get("status_msg", "")).lower()
-        ssh_host = info.get("ssh_host")
-        ssh_port = info.get("ssh_port")
-
-        if "scheduling" in status or "scheduling" in cur_state or "in use" in status_msg:
-            print("\n" + "!" * 75)
-            print(f" ⚠️ INSTANCE #{inst_id} TERKUNCI (SCHEDULING / GPU SEDANG DIPAKAI ORANG LAIN)!")
-            print(" Vast.ai tidak bisa menyalakan mesin ini sekarang.")
-            print("!" * 75)
-            rent_in = input("\nSewa GPU baru yang langsung KOSONG & SIAP PAKAI sekarang? [Y/n]: ").strip().lower()
-            if rent_in != "n":
-                new_id = display_and_rent_gpu_flow()
-                if new_id:
-                    return wait_for_instance_running(new_id, timeout=timeout)
-            return None
-        
-        if status == "running" and ssh_host and ssh_port:
-            print(f"[✓] Instance 🟢 RUNNING di {ssh_host}:{ssh_port}!")
-            return info
+        if info:
+            status = str(info.get("actual_status", "")).lower()
+            cur_state = str(info.get("cur_state", "")).lower()
+            status_msg = str(info.get("status_msg", "")).lower()
+            if "scheduling" in status or "scheduling" in cur_state or "in use" in status_msg:
+                add_log(f"Instance #{inst_id} is stuck in SCHEDULING / GPU in use. Please rent another GPU.", "vast")
+                return None
+            ssh_host = info.get("ssh_host")
+            ssh_port = info.get("ssh_port")
+            if status == "running" and ssh_host and ssh_port:
+                add_log(f"Instance #{inst_id} RUNNING at {ssh_host}:{ssh_port}", "vast")
+                cached_instance_info.update(info)
+                return info
         time.sleep(4)
-    print("[!] Waktu tunggu habis. Instance mungkin masih initializing.")
+    add_log("Timed out waiting for Vast.ai instance to boot.", "vast")
     return None
 
-def check_skip_pressed():
-    if msvcrt and msvcrt.kbhit():
-        ch = msvcrt.getch()
-        try:
-            key = ch.decode("utf-8", errors="ignore").lower()
-        except Exception:
-            key = ""
-        if key in ("p", "s", "q", "\r", "\n", " "):
-            return True
-    return False
 
-def auto_execute_command_via_ssh(ssh_host, ssh_port, cmd_string, max_retries=6):
-    """Automatically connects via SSH and executes render command, or skips immediately if 'p' key is pressed"""
-    print(f"\n[*] 🔌 Menghubungkan SSH otomatis ke root@{ssh_host}:{ssh_port}...")
-    print("    👉 [TEKAN TOMBOL 'P' KAPAN SAJA UNTUK LANGSUNG SKIP KE MANUAL / JUPYTER]")
+def launch_render_worker_thread():
+    global launch_in_progress, render_active, active_ssh_proc, worker_status_text
+    launch_cancel_event.clear()
+    launch_in_progress = True
+    worker_status_text = "Preparing Vast.ai instance..."
+    try:
+        # Wait up to 20s if tunnel is still connecting
+        wait_t = time.time()
+        while not current_tunnel_url and (time.time() - wait_t < 20):
+            if launch_cancel_event.is_set():
+                return
+            time.sleep(0.5)
 
-    for attempt in range(max_retries):
-        if check_skip_pressed():
-            print("\n[⏩ SKIP] Tombol 'p' ditekan! Beralih langsung ke perintah manual...")
-            return None
+        if not current_tunnel_url:
+            add_log("Cannot launch worker: Cloudflare tunnel is not ready.", "error")
+            worker_status_text = "Tunnel Error"
+            return
 
-        try:
-            test_res = subprocess.run([
+        cfg = load_config()
+        inst_id = str(cfg.get("instance_id", "")).strip()
+        if not inst_id:
+            inst = get_instance_info(auto_discover=True)
+            if inst:
+                inst_id = str(inst["id"])
+        if not inst_id:
+            add_log("No Vast.ai instance selected. Please Rent a GPU or set Instance ID first.", "error")
+            worker_status_text = "No Instance Selected"
+            return
+
+        inst_info = get_instance_info(auto_discover=False)
+        status = str((inst_info or {}).get("actual_status", "")).lower()
+        if status != "running":
+            worker_status_text = "Booting Vast.ai GPU..."
+            start_instance_api(inst_id)
+            inst_info = wait_for_instance_running(inst_id, timeout=180, cancel_event=launch_cancel_event)
+            if not inst_info:
+                worker_status_text = "Boot Failed / Cancelled"
+                return
+
+        ssh_host = inst_info.get("ssh_host")
+        ssh_port = inst_info.get("ssh_port")
+        if not ssh_host or not ssh_port:
+            inst_info = wait_for_instance_running(inst_id, timeout=60, cancel_event=launch_cancel_event)
+            if not inst_info:
+                worker_status_text = "SSH Info Missing"
+                return
+            ssh_host = inst_info.get("ssh_host")
+            ssh_port = inst_info.get("ssh_port")
+
+        vast_cmd = build_vast_worker_command(daemon=False)
+        worker_status_text = f"Connecting SSH ({ssh_host}:{ssh_port})..."
+        add_log(f"Connecting SSH to root@{ssh_host}:{ssh_port}...", "ssh")
+
+        ssh_ready = False
+        for attempt in range(1, 31):
+            if launch_cancel_event.is_set() or shutdown_event.is_set():
+                add_log("SSH launch cancelled by user.", "ssh")
+                worker_status_text = "Cancelled"
+                return
+            try:
+                test_res = subprocess.run(
+                    [
+                        "ssh",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=NUL" if os.name == "nt" else "/dev/null",
+                        "-o", "ConnectTimeout=4",
+                        "-p", str(ssh_port),
+                        f"root@{ssh_host}",
+                        "echo READY",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=6,
+                    creationflags=SUBPROC_FLAGS,
+                )
+                if "READY" in test_res.stdout:
+                    ssh_ready = True
+                    break
+            except Exception:
+                pass
+            if attempt % 5 == 0:
+                add_log(f"Waiting for sshd on Vast.ai ({attempt}/30)...", "ssh")
+            time.sleep(3)
+
+        if not ssh_ready:
+            add_log("Could not connect via SSH automatically. Copy the command from the UI and paste into Jupyter Terminal.", "ssh")
+            worker_status_text = "SSH Failed (Use Manual Cmd)"
+            return
+
+        add_log("SSH connected! Starting Blender 5.2 LTS worker on Vast.ai...", "ssh")
+        render_active = True
+        worker_status_text = "Running Worker Setup..."
+        proc = subprocess.Popen(
+            [
                 "ssh",
                 "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=NUL",
-                "-o", "ConnectTimeout=3",
+                "-o", "UserKnownHostsFile=NUL" if os.name == "nt" else "/dev/null",
                 "-p", str(ssh_port),
                 f"root@{ssh_host}",
-                "echo READY"
-            ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=4)
-
-            if "READY" in test_res.stdout:
-                print("[✓] SSH terhubung! Menjalankan setup Blender & render secara otomatis di Vast.ai...")
-                proc = subprocess.Popen([
-                    "ssh",
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=NUL",
-                    "-p", str(ssh_port),
-                    f"root@{ssh_host}",
-                    cmd_string
-                ])
-                return proc
-        except Exception:
-            pass
-
-        # Check for keypress during pause
-        for _ in range(8):
-            if check_skip_pressed():
-                print("\n[⏩ SKIP] Tombol 'p' ditekan! Beralih langsung ke perintah manual...")
-                return None
-            time.sleep(0.2)
-
-    print("[!] SSH otomatis belum terhubung.")
-    return None
-
-def get_usd_to_idr_rate():
-    """Fetches real-time USD/IDR exchange rate with fallback"""
-    try:
-        req = urllib.request.Request(
-            "https://open.er-api.com/v6/latest/USD",
-            headers={"User-Agent": "Mozilla/5.0"}
+                vast_cmd,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            errors="replace",
+            creationflags=SUBPROC_FLAGS,
         )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode())
-            return float(data.get("rates", {}).get("IDR", 17800.0))
-    except Exception:
-        return 17800.0
+        active_ssh_proc = proc
+        for line in iter(proc.stdout.readline, ""):
+            clean = line.rstrip("\r\n")
+            if clean:
+                add_log(clean, "ssh")
+            if shutdown_event.is_set():
+                break
+        proc.stdout.close()
+        rc = proc.wait()
+        active_ssh_proc = None
+        add_log(f"SSH worker session exited (code {rc}).", "ssh")
+        if render_active:
+            render_active = False
+            worker_status_text = "Completed" if rc == 0 else f"Exited ({rc})"
+    finally:
+        launch_in_progress = False
+        active_ssh_proc = None
 
-def calculate_and_display_cost(elapsed_seconds, boot_time=None, stop_time=None):
-    """Calculates runtime, USD cost, and IDR cost from instance power-on to power-off"""
-    inst_info = get_instance_info()
-    hourly_rate = 0.409
-    if inst_info and "dph_total" in inst_info:
+
+def idle_watchdog_loop():
+    while not shutdown_event.wait(30):
         try:
-            val = float(inst_info["dph_total"])
-            if val > 0:
-                hourly_rate = val
-        except Exception:
-            pass
+            cfg = load_config()
+            if not cfg.get("idle_stop", True):
+                continue
+            if not cfg.get("api_key", "").strip() or not str(cfg.get("instance_id", "")).strip():
+                continue
+            if render_active or launch_in_progress:
+                continue
 
-    cost_usd = (elapsed_seconds / 3600.0) * hourly_rate
-    idr_rate = get_usd_to_idr_rate()
-    cost_idr = cost_usd * idr_rate
+            idle_mins = max(1.0, float(cfg.get("idle_minutes", 10)))
+            ref_time = max(last_activity_time, vast_boot_time or 0.0)
+            idle_elapsed = time.time() - ref_time
+            if idle_elapsed < idle_mins * 60:
+                continue
 
-    hrs = int(elapsed_seconds // 3600)
-    mins = int((elapsed_seconds % 3600) // 60)
-    secs = int(elapsed_seconds % 60)
+            info = get_instance_info(auto_discover=False)
+            if info and str(info.get("actual_status", "")).lower() == "running":
+                add_log(f"Idle Watchdog: No render activity for {int(idle_elapsed // 60)}m; stopping instance.", "cost")
+                stop_instance_api(info.get("id"))
+        except Exception as e:
+            add_log(f"Idle Watchdog notice: {e}", "system")
 
-    if hrs > 0:
-        time_str = f"{hrs}h {mins}m {secs}s"
-    elif mins > 0:
-        time_str = f"{mins}m {secs}s"
-    else:
-        time_str = f"{secs}s"
 
-    formatted_idr = f"Rp {int(round(cost_idr)):,}".replace(",", ".")
-    target_folder = (OUTPUT_DIR / active_job_name).resolve() if active_job_name else OUTPUT_DIR.resolve()
+# ---------------------------------------------------------------------------
+# HTTP Handler 1: Public Cloudflare-Tunneled Worker Receiver (Token-Gated)
+# ---------------------------------------------------------------------------
+class WorkerTunnelHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
 
-    boot_str = time.strftime("%H:%M:%S", time.localtime(boot_time)) if boot_time else "Unknown"
-    stop_str = time.strftime("%H:%M:%S", time.localtime(stop_time)) if stop_time else time.strftime("%H:%M:%S")
-
-    print("\n" + "=" * 65)
-    print(" 🎉 RENDER COMPLETED ON VAST.AI!")
-    print("=" * 65)
-    print(f" 📁 Saved to:        {target_folder}")
-    print(f" 🖼️  Total Frames:    {total_frames_received} frames")
-    print(f" ⏱️  Total Run Time:  {time_str} ({(elapsed_seconds/3600.0):.3f} hours)")
-    print(f"    - Vast.ai Boot:  {boot_str}")
-    print(f"    - Vast.ai Stop:  {stop_str}")
-    print(f" 💵 Vast.ai Rate:    ${hourly_rate:.3f}/hour")
-    print(f" 💵 Total Cost (USD): ${cost_usd:.4f}")
-    print(f" 🇮🇩 Total Cost (IDR): {formatted_idr} (Rate: ~Rp {int(idr_rate):,}/USD)")
-    print("=" * 65)
-
-class RenderReceiverHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-    def send_json(self, data, code=200):
+    def _is_authorized(self, parsed):
+        hdr_tok = (self.headers.get("X-Worker-Token") or "").strip()
+        if hdr_tok and secrets.compare_digest(hdr_tok, WORKER_TOKEN):
+            return True
+        qs = urllib.parse.parse_qs(parsed.query)
+        q_tok = (qs.get("token", [""])[0]).strip()
+        if q_tok and secrets.compare_digest(q_tok, WORKER_TOKEN):
+            return True
+        return False
+
+    def _send_json(self, data, code=200):
         body = json.dumps(data).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -541,161 +799,196 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_text(self, text, code=200):
+        body = text.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _stream_file(self, file_path):
+        file_size = file_path.stat().st_size
+        filename = file_path.name
+        range_header = self.headers.get("Range")
+        start_byte = 0
+        end_byte = file_size - 1
+
+        if range_header and range_header.startswith("bytes="):
+            try:
+                ranges = range_header[6:].split("-")
+                start_byte = int(ranges[0]) if ranges[0] else 0
+                if len(ranges) > 1 and ranges[1]:
+                    end_byte = int(ranges[1])
+            except Exception:
+                pass
+
+        content_length = max(0, end_byte - start_byte + 1)
+        if range_header:
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start_byte}-{end_byte}/{file_size}")
+        else:
+            self.send_response(200)
+
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+
+        add_log(f"Sending {filename} to Vast.ai worker ({content_length / (1024*1024):.1f} MB)...", "worker")
+        chunk_size = 256 * 1024
+        with open(file_path, "rb") as f:
+            f.seek(start_byte)
+            remaining = content_length
+            while remaining > 0:
+                data = f.read(min(chunk_size, remaining))
+                if not data:
+                    break
+                try:
+                    self.wfile.write(data)
+                    remaining -= len(data)
+                except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
+                    add_log(f"Upload of {filename} interrupted by network.", "worker")
+                    return
+        add_log(f"Delivered {filename} to Vast.ai worker.", "worker")
+
+    def _build_worker_job_payload(self):
+        with state_lock:
+            resp = dict(current_job_config)
+        src_type = resp.get("source_type", "gdrive")
+        resp["tunnel_url"] = current_tunnel_url
+        resp["has_addons"] = bool(current_addons_zip and current_addons_zip.is_file())
+        if src_type == "gdrive" and resp.get("gdrive_url"):
+            resp["upload_project"] = False
+        elif src_type == "pc_upload" and current_project_file and current_project_file.is_file():
+            resp["gdrive_url"] = ""
+            resp["upload_project"] = True
+            resp["project_name"] = current_project_file.name
+            resp["project_type"] = current_project_type or ("zip" if current_project_file.suffix.lower() == ".zip" else "blend")
+            resp["file_size"] = current_project_file.stat().st_size
+        else:
+            resp["gdrive_url"] = ""
+            resp["upload_project"] = False
+        return resp
+
     def do_GET(self):
-        global last_activity_time, current_project_file, current_project_type
+        global last_activity_time, worker_connected, pending_daemon_job
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
         if path == "/ping":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"PONG")
+            self._send_text("PONG", 200)
             return
 
-        elif path == "/download_project":
-            if not current_project_file or not current_project_file.exists():
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b"No project file prepared")
-                return
+        if not self._is_authorized(parsed):
+            self._send_text("Unauthorized", 401)
+            return
 
-            file_size = current_project_file.stat().st_size
-            filename = current_project_file.name
+        last_activity_time = time.time()
+        worker_connected = True
 
-            range_header = self.headers.get("Range")
-            start_byte = 0
-            end_byte = file_size - 1
+        if path == "/api/job_config":
+            self._send_json(self._build_worker_job_payload())
+            return
 
-            if range_header and range_header.startswith("bytes="):
-                try:
-                    ranges = range_header[6:].split("-")
-                    start_byte = int(ranges[0]) if ranges[0] else 0
-                    if len(ranges) > 1 and ranges[1]:
-                        end_byte = int(ranges[1])
-                except Exception:
-                    pass
-
-            content_length = end_byte - start_byte + 1
-
-            if range_header:
-                self.send_response(206)
-                self.send_header("Content-Range", f"bytes {start_byte}-{end_byte}/{file_size}")
+        if path == "/api/daemon_poll":
+            with state_lock:
+                job = pending_daemon_job
+                pending_daemon_job = None
+            if job:
+                self._send_json(job)
             else:
-                self.send_response(200)
-
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-            self.send_header("Content-Length", str(content_length))
-            self.send_header("Accept-Ranges", "bytes")
-            self.end_headers()
-
-            print(f"\n[📤 PC Upload] Mengirim {filename} ke Vast.ai ({content_length / (1024*1024):.1f} MB)...")
-            chunk_size = 256 * 1024
-            bytes_sent = 0
-            with open(current_project_file, "rb") as f:
-                f.seek(start_byte)
-                remaining = content_length
-                while remaining > 0:
-                    read_len = min(chunk_size, remaining)
-                    data = f.read(read_len)
-                    if not data:
-                        break
-                    try:
-                        self.wfile.write(data)
-                        remaining -= len(data)
-                        bytes_sent += len(data)
-                    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
-                        print(f"[!] Upload {filename} terputus oleh jaringan.")
-                        return
-
-            print(f"[✓] {filename} berhasil dikirim ke Vast.ai!")
+                self._send_json({"active": False})
             return
 
-        elif path == "/api/job_config":
-            resp = dict(current_job_config)
-            resp["tunnel_url"] = current_tunnel_url
-            resp["gdrive_url"] = current_gdrive_url or ""
-            if current_gdrive_url:
-                resp["source_type"] = "gdrive"
-                resp["upload_project"] = False
-            elif current_project_file and current_project_file.exists():
-                resp["source_type"] = "pc_upload"
-                resp["upload_project"] = True
-                resp["project_name"] = current_project_file.name
-                resp["project_type"] = current_project_type or ("zip" if current_project_file.suffix.lower() == ".zip" else "blend")
-                resp["file_size"] = current_project_file.stat().st_size
-            else:
-                resp["source_type"] = "vast_local"
-                resp["upload_project"] = False
-            self.send_json(resp)
-            return
-
-        elif path.startswith("/renders/"):
-            rel_path = path[len("/renders/"):]
-            file_path = OUTPUT_DIR / urllib.parse.unquote(rel_path)
-            if file_path.is_file():
-                ext = file_path.suffix.lower()
-                mime = "image/png" if ext == ".png" else "image/jpeg"
-                content = file_path.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", mime)
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
+        if path == "/download_project":
+            if not current_project_file or not current_project_file.is_file():
+                self._send_text("No project file prepared", 404)
                 return
-            self.send_response(404)
-            self.end_headers()
+            self._stream_file(current_project_file)
             return
 
-        self.send_response(404)
-        self.end_headers()
+        if path == "/download_addons":
+            if not current_addons_zip or not current_addons_zip.is_file():
+                self._send_text("No add-ons bundle", 404)
+                return
+            self._stream_file(current_addons_zip)
+            return
+
+        self._send_text("Not Found", 404)
 
     def do_POST(self):
-        global total_frames_received, active_job_name, last_activity_time, vast_boot_time
+        global total_frames_received, active_job_name, last_activity_time
+        global worker_connected, worker_status_text, render_active, vast_boot_time
+
         parsed = urllib.parse.urlparse(self.path)
+        if not self._is_authorized(parsed):
+            self._send_text("Unauthorized", 401)
+            return
+
         path = parsed.path
         last_activity_time = time.time()
+        worker_connected = True
 
         if not vast_boot_time:
             saved_bt = load_config().get("last_boot_time")
             if saved_bt:
                 vast_boot_time = float(saved_bt)
-            else:
-                record_vast_boot_time(time.time())
+
+        length = int(self.headers.get("Content-Length", 0))
 
         if path == "/status":
-            length = int(self.headers.get('Content-Length', 0))
-            msg = self.rfile.read(length).decode('utf-8', errors='ignore')
-            print(f"\n[Vast.ai Status] {msg}")
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
+            msg = self.rfile.read(length).decode("utf-8", errors="replace").strip()
+            worker_status_text = msg or "Running"
+            render_active = True
+            add_log(msg, "worker")
+            self._send_text("OK")
             return
 
-        elif path == "/finish_job":
-            length = int(self.headers.get('Content-Length', 0))
-            msg = self.rfile.read(length).decode("utf-8", errors="ignore")
-            
+        if path == "/log":
+            raw = self.rfile.read(length).decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw)
+                txt = data.get("text", "")
+            except Exception:
+                txt = raw
+            if txt:
+                add_log(txt, "blender")
+            self._send_text("OK")
+            return
+
+        if path == "/finish_job":
+            raw = self.rfile.read(length).decode("utf-8", errors="replace")
+            success = True
+            is_daemon = False
+            rc = 0
+            try:
+                info = json.loads(raw)
+                success = bool(info.get("success", True))
+                is_daemon = bool(info.get("is_daemon", False))
+                rc = int(info.get("returncode", 0))
+            except Exception:
+                pass
+
+            render_active = False
+            worker_status_text = "Completed" if success else f"Failed (code {rc})"
             stop_time = time.time()
             saved_cfg = load_config()
-            boot_t = vast_boot_time or (float(saved_cfg.get("last_boot_time", stop_time)))
+            boot_t = vast_boot_time or float(saved_cfg.get("last_boot_time", stop_time))
             elapsed = max(1.0, stop_time - float(boot_t))
-            
             calculate_and_display_cost(elapsed, boot_time=float(boot_t), stop_time=stop_time)
 
-            if saved_cfg.get("auto_stop", True):
+            if saved_cfg.get("auto_stop", True) and not is_daemon:
                 stop_instance_api()
+            elif saved_cfg.get("auto_stop", True) and is_daemon:
+                add_log("Daemon mode: keeping Vast.ai instance alive for queued jobs.", "vast")
 
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
+            self._send_text("OK")
             return
 
-        elif path == "/upload_frame":
-            content_length = int(self.headers.get('Content-Length', 0))
-            
-            raw_job = self.headers.get('X-Job', 'default_job')
+        if path == "/upload_frame":
+            raw_job = self.headers.get("X-Job", "default_job")
             job_name = re.sub(r'[\r\n\t\x00]', '', raw_job).strip().strip('"\'')
             job_name = re.sub(r'[^\w\-\.]', '_', job_name) or "render_job"
             active_job_name = job_name
@@ -703,14 +996,12 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
             target_job_dir = OUTPUT_DIR / job_name
             target_job_dir.mkdir(parents=True, exist_ok=True)
 
-            raw_filename = self.headers.get('X-Filename', '')
+            raw_filename = self.headers.get("X-Filename", "")
             if raw_filename:
                 filename = re.sub(r'[\r\n\t\x00]', '', raw_filename).strip().strip('"\'')
             else:
-                query_params = urllib.parse.parse_qs(parsed.query)
-                filename = query_params.get('filename', [''])[0]
-                filename = re.sub(r'[\r\n\t\x00]', '', filename).strip().strip('"\'')
-            
+                qp = urllib.parse.parse_qs(parsed.query)
+                filename = re.sub(r'[\r\n\t\x00]', '', qp.get("filename", [""])[0]).strip().strip('"\'')
             if not filename:
                 filename = f"frame_{int(time.time()*1000)}.png"
 
@@ -718,346 +1009,201 @@ class RenderReceiverHandler(BaseHTTPRequestHandler):
             target_path = target_job_dir / filename
             temp_path = target_job_dir / f".tmp_{filename}"
 
-            bytes_left = content_length
+            bytes_left = length
             chunk_size = 65536
             with open(temp_path, "wb") as f:
                 while bytes_left > 0:
-                    read_amount = min(chunk_size, bytes_left)
-                    chunk = self.rfile.read(read_amount)
+                    chunk = self.rfile.read(min(chunk_size, bytes_left))
                     if not chunk:
                         break
                     f.write(chunk)
                     bytes_left -= len(chunk)
 
-            # If transfer was cut short by internet disconnect, discard truncated file
             if bytes_left > 0:
-                try:
-                    temp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                print(f"[!] Warning: {filename} transfer interrupted by network drop. Waiting for auto-retry...")
+                temp_path.unlink(missing_ok=True)
+                add_log(f"{filename} transfer interrupted; awaiting worker retry.", "worker")
+                self._send_text("Incomplete", 499)
                 return
 
             try:
                 if target_path.exists():
-                    try:
-                        target_path.unlink()
-                    except Exception:
-                        pass
+                    target_path.unlink(missing_ok=True)
                 temp_path.replace(target_path)
             except Exception:
-                try:
-                    shutil.copy2(temp_path, target_path)
-                    temp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                shutil.copy2(temp_path, target_path)
+                temp_path.unlink(missing_ok=True)
 
             total_frames_received += 1
-            size_kb = target_path.stat().st_size / 1024
-            timestamp_str = time.strftime("%H:%M:%S")
-            print(f"[{timestamp_str}] ✓ [{total_frames_received:03d}] {job_name}/{filename} ({size_kb:.1f} KB) -> Saved")
-
-            try:
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"OK")
-            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
-                pass
+            size_kb = target_path.stat().st_size / 1024.0
+            add_log(f"Frame [{total_frames_received:03d}] {job_name}/{filename} ({size_kb:.1f} KB) saved.", "frame")
+            self._send_text("OK")
             return
 
-        self.send_response(404)
-        self.end_headers()
+        self._send_text("Not Found", 404)
 
-def drain_pipe(pipe):
-    try:
-        for _ in iter(pipe.readline, ''):
-            pass
-    except Exception:
-        pass
 
-def start_cloudflare_tunnel():
-    global current_tunnel_url
-    cloudflared_bin = BASE_DIR / "cloudflared.exe"
-    if not cloudflared_bin.exists():
-        cloudflared_bin = "cloudflared"
+# ---------------------------------------------------------------------------
+# Native Desktop App Launcher & Legacy CLI Fallback
+# ---------------------------------------------------------------------------
+def start_servers(worker_port=8888):
+    worker_server = ThreadedReceiverServer(("127.0.0.1", worker_port), WorkerTunnelHandler)
+    threading.Thread(target=worker_server.serve_forever, daemon=True).start()
+    return worker_server
 
-    cmd = [str(cloudflared_bin), "tunnel", "--url", "http://localhost:8888"]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
 
-    tunnel_url = None
-    start_time = time.time()
-
-    for line in iter(proc.stdout.readline, ''):
-        match = re.search(r'(https://[a-zA-Z0-9\-\.]+\.trycloudflare\.com)', line)
-        if match:
-            tunnel_url = match.group(1)
-            break
-        if time.time() - start_time > 20:
-            break
-
-    # Drain remaining output in background so cloudflared stdout buffer never blocks on Windows
-    threading.Thread(target=drain_pipe, args=(proc.stdout,), daemon=True).start()
-
-    current_tunnel_url = tunnel_url or ""
-    return proc, tunnel_url
-
-def main():
-    global current_job_config, vast_boot_time, current_project_file, current_project_type, current_gdrive_url
-    print("=" * 70)
-    print(" 🚀 VAST.AI BLENDER RENDER RECEIVER (CLI)")
-    print("=" * 70)
-
-    cfg = load_config()
-
-    # 1. Pilih Proyek Blender
-    print("\n--- 📁 1. PILIH SUMBER PROYEK BLENDER ---")
-    print("[1] Google Drive Link (HEMAT BIAYA: Upload di PC saat GPU mati, lalu paste link)")
-    print("[2] Upload langsung dari PC via Tunnel (.blend / .zip lokal)")
-    print("[3] Gunakan proyek yang sudah ada di Vast.ai")
-    
-    proj_choice = input("Pilih sumber proyek [default: 1]: ").strip() or "1"
-    
-    upload_project_needed = False
-    current_gdrive_url = ""
-    current_project_file = None
-    current_project_type = None
-
-    if proj_choice == "1":
-        while True:
-            raw_url = input("\nMasukkan Link Share Google Drive (.blend atau .zip):\n(Pastikan link diset 'Anyone with the link can view')\n> ").strip().strip('"\'')
-            if not raw_url:
-                print("[!] Link Google Drive tidak boleh kosong.")
-                continue
-            if "drive.google.com" not in raw_url and "http" not in raw_url:
-                print("[!] Format URL tidak valid. Pastikan link Google Drive yang benar.")
-                continue
-            current_gdrive_url = raw_url
-            print(f"[✓] Google Drive link tersimpan: {current_gdrive_url}")
-            break
-
-    elif proj_choice == "2":
-        while True:
-            raw_path = input("\nMasukkan path file (.blend / .zip) atau folder proyek di PC:\n(Tips: Drag & drop file/folder langsung ke terminal ini)\n> ").strip().strip('"\'')
-            if not raw_path:
-                found_blends = list(BASE_DIR.glob("*.blend"))
-                if found_blends:
-                    raw_path = str(found_blends[0])
-                    print(f"[*] Menggunakan file .blend lokal: {raw_path}")
-                else:
-                    print("[!] Path tidak boleh kosong.")
-                    continue
-
-            p = Path(raw_path)
-            if not p.exists():
-                print(f"[!] File atau folder tidak ditemukan: {p}")
-                continue
-
-            if p.is_dir():
-                blends_in_dir = list(p.glob("*.blend")) + list(p.glob("**/*.blend"))
-                if not blends_in_dir:
-                    print(f"[!] Peringatan: Tidak ditemukan file .blend di dalam folder {p.name}!")
-                    confirm = input("Tetap kompres dan kirim folder ini? [y/N]: ").strip().lower()
-                    if confirm != "y":
-                        continue
-                current_project_file = package_folder_to_zip(p)
-                current_project_type = "zip"
-            elif p.suffix.lower() == ".zip":
-                current_project_file = p
-                current_project_type = "zip"
-            elif p.suffix.lower() == ".blend":
-                current_project_file = p
-                current_project_type = "blend"
-            else:
-                print(f"[!] Format '{p.suffix}' tidak didukung. Gunakan .blend, .zip, atau folder.")
-                continue
-
-            size_mb = current_project_file.stat().st_size / (1024 * 1024)
-            print(f"[✓] Proyek siap dikirim: {current_project_file.name} ({size_mb:.1f} MB)")
-            upload_project_needed = True
-            break
-    else:
-        print("[*] Menggunakan file proyek yang sudah tersimpan di Vast.ai.")
-
-    # 2. Check and display instance status
-    inst_data = get_instance_info()
-    current_status = (inst_data.get("actual_status", "") if inst_data else "").lower()
-    status_msg = (inst_data.get("status_msg", "") if inst_data else "").lower()
-    gpu_name = inst_data.get("gpu_name", "GPU") if inst_data else "GPU"
-    dph = float(inst_data.get("dph_total", 0.409)) if inst_data else 0.409
-
-    is_stuck = ("scheduling" in current_status or "in use" in status_msg or "offline" in current_status)
-    if is_stuck:
-        print("\n" + "!" * 75)
-        print(f" ⚠️ PERINGATAN: Instance #{cfg.get('instance_id')} berstatus SCHEDULING / GPU DIGUNAKAN ORANG LAIN!")
-        print(" Vast.ai tidak bisa menyalakan mesin ini sekarang sampai GPU bebas (bisa berjam-jam/berminggu-minggu).")
-        print("!" * 75)
-        rent_in = input("\nSewa GPU baru yang langsung KOSONG & SIAP PAKAI sekarang? [Y/n]: ").strip().lower()
-        if rent_in != "n":
-            new_id = display_and_rent_gpu_flow()
-            if new_id:
-                record_vast_boot_time(time.time())
-                inst_data = wait_for_instance_running(new_id)
-    elif inst_data:
-        print(f"\n[Vast.ai Status] Instance #{cfg.get('instance_id')}: {current_status.upper()} ({gpu_name} | Rate: ${dph:.3f}/hr)")
-        if current_status == "running":
-            if cfg.get("last_boot_time"):
-                vast_boot_time = float(cfg["last_boot_time"])
-                b_str = time.strftime("%H:%M:%S", time.localtime(vast_boot_time))
-                print(f"[*] ⏱️ Session timer active (Booted at {b_str})")
-            else:
-                record_vast_boot_time(time.time())
-            print(f"[1] Gunakan instance yang sedang berjalan ini ({gpu_name})")
-            print("[2] Ganti & sewa GPU lain (misal RTX 4090 / RTX 5090)")
-            run_opt = input("Pilih opsi [default: 1]: ").strip() or "1"
-            if run_opt == "2":
-                new_id = display_and_rent_gpu_flow()
-                if new_id:
-                    record_vast_boot_time(time.time())
-                    inst_data = wait_for_instance_running(new_id)
-        else:
-            print(f"[1] Nyalakan instance yang sudah ada ({gpu_name})")
-            print("[2] Cari & sewa GPU lain yang ready (RTX 4090 / RTX 5090 / dll)")
-            opt = input("Pilih opsi [default: 1]: ").strip() or "1"
-            if opt == "2":
-                new_id = display_and_rent_gpu_flow()
-                if new_id:
-                    record_vast_boot_time(time.time())
-                    inst_data = wait_for_instance_running(new_id)
-            else:
-                if current_gdrive_url:
-                    print("\n[*] 🚀 Proyek sudah siap di Google Drive! Menyalakan instance Vast.ai secara instan...")
-                    start_instance_api()
-                    inst_data = wait_for_instance_running(cfg.get("instance_id"))
-                else:
-                    boot_in = input("\nInstance saat ini STOPPED. Nyalakan sekarang? [Y/n]: ").strip().lower()
-                    if boot_in != "n":
-                        start_instance_api()
-                        inst_data = wait_for_instance_running(cfg.get("instance_id"))
-    else:
-        print("\n[Vast.ai Status] Belum ada instance yang terkonfigurasi.")
-        rent_in = input("Cari & sewa GPU baru sekarang? [Y/n]: ").strip().lower()
-        if rent_in != "n":
-            new_id = display_and_rent_gpu_flow()
-            if new_id:
-                record_vast_boot_time(time.time())
-                inst_data = wait_for_instance_running(new_id)
-
-    # 3. Interactive Render Configuration
-    print("\n--- ⚙️  2. PENGATURAN RENDER ---")
-    print("[1] Render Full Animation (seluruh frame)")
-    print("[2] Render Rentang Frame Tertentu (contoh: 1 sampai 120)")
-    print("[3] Render 1 Frame Uji Coba (contoh: frame 10)")
-    
-    choice = input("Pilih mode [default: 1]: ").strip() or "1"
-    
-    start_f = ""
-    end_f = ""
-    single_f = ""
-
-    if choice == "2":
-        start_f = input("Start frame [1]: ").strip() or "1"
-        end_f = input("End frame [120]: ").strip() or "120"
-    elif choice == "3":
-        single_f = input("Frame number to render [1]: ").strip() or "1"
-
-    samples_in = input("Cycles Samples [128]: ").strip() or "128"
-    denoise_in = input("Aktifkan AI Denoising (OptiX / OpenImageDenoise)? [Y/n]: ").strip().lower()
-    denoise_val = denoise_in != "n"
-
-    autostop_in = input("Otomatis matikan Vast.ai setelah selesai render? [Y/n]: ").strip().lower()
-    cfg["auto_stop"] = (autostop_in != "n")
-    save_config(cfg)
-
-    current_job_config = {
-        "upload_project": upload_project_needed,
-        "gdrive_url": current_gdrive_url,
-        "project_name": current_project_file.name if current_project_file else "",
-        "project_type": current_project_type or "",
-        "file_size": current_project_file.stat().st_size if current_project_file else 0,
-        "start_frame": start_f,
-        "end_frame": end_f,
-        "single_frame": single_f,
-        "samples": samples_in,
-        "denoise": denoise_val
-    }
-
-    # 4. Start local receiver & Cloudflare tunnel
-    print("\n[*] Starting local receiver on port 8888...")
-    server = ThreadedReceiverServer(("0.0.0.0", 8888), RenderReceiverHandler)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-
-    print("[*] Establishing high-speed Cloudflare tunnel...")
-    tunnel_proc, tunnel_url = start_cloudflare_tunnel()
-
-    if not tunnel_url:
-        print("[!] Tunnel error. Using localhost.")
-        tunnel_url = "http://localhost:8888"
-
-    # Build command
-    extra_flags = ""
-    if single_f:
-        extra_flags += f" --single {single_f}"
-    elif start_f and end_f:
-        extra_flags += f" --start {start_f} --end {end_f}"
-
-    vast_cmd = f"curl -sSL https://raw.githubusercontent.com/hamkaaaa/VastAIReciever/main/worker.sh | bash -s -- --server {tunnel_url}{extra_flags}"
-
-    # 5. Otomatis hubungkan SSH & jalankan render di Vast.ai
-    ssh_host = inst_data.get("ssh_host") if inst_data else None
-    ssh_port = inst_data.get("ssh_port") if inst_data else None
-
-    cfg = load_config()
-    current_inst_id = cfg.get("instance_id")
-    if not ssh_host or not ssh_port or (inst_data and inst_data.get("actual_status") != "running"):
-        inst_data = wait_for_instance_running(current_inst_id)
-        if inst_data:
-            ssh_host = inst_data.get("ssh_host")
-            ssh_port = inst_data.get("ssh_port")
-
-    ssh_proc = None
-    if ssh_host and ssh_port:
-        ssh_proc = auto_execute_command_via_ssh(ssh_host, ssh_port, vast_cmd)
-
-    if not ssh_proc:
-        copied_banner = ""
+def cleanup_processes(worker_server, _unused=None):
+    shutdown_event.set()
+    if active_ssh_proc is not None:
         try:
-            p_clip = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
-            p_clip.communicate(vast_cmd.encode("utf-8"))
-            copied_banner = " [📋 DISALIN KE CLIPBOARD - TINGGAL PASTE / CTRL+V DI TERMINAL]"
+            active_ssh_proc.terminate()
+        except Exception:
+            pass
+    if tunnel_proc is not None:
+        try:
+            tunnel_proc.terminate()
+        except Exception:
+            pass
+    if worker_server is not None:
+        try:
+            worker_server.shutdown()
+            worker_server.server_close()
         except Exception:
             pass
 
-        print("\n" + "=" * 78)
-        print(f" 🎯 JALANKAN PERINTAH INI DI TERMINAL JUPYTER VAST.AI{copied_banner}:")
-        print("=" * 78)
-        print(f"\n{vast_cmd}\n")
-        print("=" * 78)
 
-    print(f"[*] Optimizations: Persistent Data ON | Auto-Scripts ON (-y) | Samples: {samples_in}")
-    print(f"[*] Auto-Stop on Completion: {'YES (Will shut down instance)' if cfg['auto_stop'] else 'NO'}")
-    if not vast_boot_time:
-        record_vast_boot_time(time.time())
-    print("\n[*] Listening for incoming frames... (Press Ctrl+C to stop)\n")
+def run_self_test():
+    import customtkinter  # noqa: F401
+    from PIL import ImageTk  # noqa: F401
+    import desktop_app
+
+    ico = desktop_app._resolve_icon_path()
+    assert ico is not None and ico.is_file(), f"Missing app_icon.ico (RESOURCE_DIR={RESOURCE_DIR})"
+
+    ws = start_servers(worker_port=0)
+    wport = ws.server_address[1]
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{wport}/ping", timeout=3) as r:
+            assert r.read() == b"PONG"
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{wport}/api/job_config", timeout=3)
+            raise AssertionError("Expected 401 without token")
+        except urllib.error.HTTPError as e:
+            assert e.code == 401
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{wport}/api/job_config",
+            headers={"X-Worker-Token": WORKER_TOKEN},
+        )
+        with urllib.request.urlopen(req, timeout=3) as r:
+            assert r.status == 200
+
+        app = desktop_app.VastRenderHubApp(worker_server=ws)
+        app.withdraw()
+        app.update_idletasks()
+        app._on_close()
+        print(f"SELF_TEST_OK worker_port={wport}")
+    finally:
+        cleanup_processes(ws)
+
+
+def run_gui_mode():
+    import desktop_app
+
+    add_log(f"Starting {APP_VERSION} (Native Desktop)...", "system")
+    worker_server = start_servers(worker_port=8888)
+    add_log("Worker tunnel backend listening on 127.0.0.1:8888", "system")
+
+    ensure_tunnel_async()
+    threading.Thread(target=idle_watchdog_loop, daemon=True).start()
 
     try:
-        while True:
+        desktop_app.run_desktop_app(worker_server)
+    finally:
+        cleanup_processes(worker_server)
+
+
+def run_cli_mode():
+    """Legacy interactive terminal mode."""
+    global current_project_file, current_project_type
+    print("=" * 70)
+    print(f" 🚀 {APP_VERSION} - CLI MODE")
+    print("=" * 70)
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        key = input("Masukkan Vast.ai API Key Anda: ").strip()
+        if key:
+            cfg["api_key"] = key
+            save_config(cfg)
+
+    print("\n--- 📁 1. PILIH SUMBER PROYEK BLENDER ---")
+    print("[1] Google Drive Link")
+    print("[2] File/Folder Lokal (.blend / .zip / folder)")
+    print("[3] Proyek yang sudah ada di Vast.ai")
+    p_choice = input("Pilih sumber [1]: ").strip() or "1"
+
+    with state_lock:
+        if p_choice == "1":
+            current_job_config["source_type"] = "gdrive"
+            current_job_config["gdrive_url"] = input("Link Google Drive: ").strip().strip('"\'')
+        elif p_choice == "2":
+            current_job_config["source_type"] = "pc_upload"
+            current_job_config["project_path"] = input("Path file/folder lokal: ").strip().strip('"\'')
+        else:
+            current_job_config["source_type"] = "vast_local"
+
+        print("\n--- ⚙️  2. PENGATURAN RENDER (BLENDER 5.2 LTS) ---")
+        mode_in = input("Mode: [1] Full Anim, [2] Range, [3] Single Frame [1]: ").strip() or "1"
+        if mode_in == "2":
+            current_job_config["render_mode"] = "range"
+            current_job_config["start_frame"] = input("Start frame [1]: ").strip() or "1"
+            current_job_config["end_frame"] = input("End frame [120]: ").strip() or "120"
+        elif mode_in == "3":
+            current_job_config["render_mode"] = "single"
+            current_job_config["single_frame"] = input("Frame number [1]: ").strip() or "1"
+        else:
+            current_job_config["render_mode"] = "all"
+
+        current_job_config["samples"] = input("Samples [kosong = default .blend]: ").strip()
+        current_job_config["denoise"] = input("OptiX/OIDN Denoise? [Y/n]: ").strip().lower() != "n"
+        current_job_config["persistent_data"] = input("Persistent Data? [Y/n]: ").strip().lower() != "n"
+        current_job_config["exec_all_scripts"] = True
+
+    ok, err = prepare_local_bundles_from_config()
+    if not ok:
+        print(f"[!] Error: {err}")
+        sys.exit(1)
+
+    worker_server = start_servers(worker_port=8888)
+    start_cloudflare_tunnel()
+    threading.Thread(target=idle_watchdog_loop, daemon=True).start()
+    threading.Thread(target=launch_render_worker_thread, daemon=True).start()
+
+    try:
+        while not shutdown_event.is_set():
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nStopping CLI receiver...")
-        if tunnel_proc:
-            tunnel_proc.terminate()
-        server.shutdown()
-        if vast_boot_time:
-            now_t = time.time()
-            elapsed = max(1.0, now_t - vast_boot_time)
-            calculate_and_display_cost(elapsed, boot_time=vast_boot_time, stop_time=now_t)
+        pass
+    finally:
+        cleanup_processes(worker_server)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=APP_VERSION)
+    parser.add_argument("--cli", action="store_true", help="Run interactive terminal CLI mode")
+    parser.add_argument("--version", action="store_true", help="Print version and exit")
+    parser.add_argument("--self-test", action="store_true", help="Run smoke test and exit")
+    args = parser.parse_args()
+
+    if args.version:
+        print(APP_VERSION)
+        return
+    if args.self_test:
+        run_self_test()
+        return
+    if args.cli:
+        run_cli_mode()
+    else:
+        run_gui_mode()
+
 
 if __name__ == "__main__":
     main()

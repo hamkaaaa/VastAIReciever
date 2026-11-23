@@ -5,3 +5,11 @@ renders/
 .vast_config.json
 *.tar.gz
 *.blend
+build/
+dist/
+*.spec
+*.exe
+.cache/
+.app_profile/
+addons/
+vast_render_hub.log

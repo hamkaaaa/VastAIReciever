@@ -1,4 +1,8 @@
 @echo off
 cd /d "%~dp0"
-python receiver.py
-pause
+if exist "VastRenderHub.exe" (
+    start "" "%~dp0VastRenderHub.exe"
+) else (
+    python receiver.py
+    pause
+)

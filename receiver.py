@@ -9,6 +9,9 @@ and idle auto-stop protection.
 
 import os
 import sys
+
+if __name__ == "__main__":
+    sys.modules["receiver"] = sys.modules[__name__]
 import re
 import io
 import json
@@ -57,6 +60,7 @@ WORKER_TOKEN = secrets.token_hex(16)
 state_lock = threading.Lock()
 log_lock = threading.Lock()
 browse_lock = threading.Lock()
+tunnel_lock = threading.Lock()
 shutdown_event = threading.Event()
 launch_cancel_event = threading.Event()
 
@@ -72,6 +76,7 @@ vast_boot_time = None
 
 current_tunnel_url = ""
 tunnel_proc = None
+tunnel_starting = False
 worker_connected = False
 worker_status_text = "Idle"
 render_active = False
@@ -547,52 +552,59 @@ def find_or_install_cloudflared():
 
 
 def start_cloudflare_tunnel():
-    global current_tunnel_url, tunnel_proc
-    cf_bin = find_or_install_cloudflared()
-    if not cf_bin:
-        add_log("cloudflared binary unavailable; tunnel disabled.", "tunnel")
-        return None, ""
-
-    cmd = [cf_bin, "tunnel", "--url", "http://127.0.0.1:8888"]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        creationflags=SUBPROC_FLAGS,
-    )
-    tunnel_proc = proc
-
-    found_url = ""
-    start_t = time.time()
-    for line in iter(proc.stdout.readline, ""):
-        m = re.search(r'(https://[a-zA-Z0-9\-\.]+\.trycloudflare\.com)', line)
-        if m:
-            found_url = m.group(1)
-            break
-        if time.time() - start_t > 25 or shutdown_event.is_set():
-            break
-
-    def _drain():
+    global current_tunnel_url, tunnel_proc, tunnel_starting
+    with tunnel_lock:
+        if current_tunnel_url or (tunnel_proc is not None and tunnel_proc.poll() is None):
+            return tunnel_proc, current_tunnel_url
+        tunnel_starting = True
         try:
-            for _ in iter(proc.stdout.readline, ""):
-                if shutdown_event.is_set():
-                    break
-        except Exception:
-            pass
+            cf_bin = find_or_install_cloudflared()
+            if not cf_bin:
+                add_log("cloudflared binary unavailable; tunnel disabled.", "tunnel")
+                return None, ""
 
-    threading.Thread(target=_drain, daemon=True).start()
-    current_tunnel_url = found_url
-    if found_url:
-        add_log(f"Cloudflare tunnel active: {found_url}", "tunnel")
-    else:
-        add_log("Cloudflare tunnel timed out.", "tunnel")
-    return proc, found_url
+            cmd = [cf_bin, "tunnel", "--url", "http://127.0.0.1:8888"]
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                creationflags=SUBPROC_FLAGS,
+            )
+            tunnel_proc = proc
+
+            found_url = ""
+            start_t = time.time()
+            for line in iter(proc.stdout.readline, ""):
+                m = re.search(r'(https://[a-zA-Z0-9\-\.]+\.trycloudflare\.com)', line)
+                if m:
+                    found_url = m.group(1)
+                    break
+                if time.time() - start_t > 25 or shutdown_event.is_set():
+                    break
+
+            def _drain():
+                try:
+                    for _ in iter(proc.stdout.readline, ""):
+                        if shutdown_event.is_set():
+                            break
+                except Exception:
+                    pass
+
+            threading.Thread(target=_drain, daemon=True).start()
+            current_tunnel_url = found_url
+            if found_url:
+                add_log(f"Cloudflare tunnel active: {found_url}", "tunnel")
+            else:
+                add_log("Cloudflare tunnel timed out.", "tunnel")
+            return proc, found_url
+        finally:
+            tunnel_starting = False
 
 
 def ensure_tunnel_async():
-    if current_tunnel_url:
+    if current_tunnel_url or tunnel_starting or (tunnel_proc is not None and tunnel_proc.poll() is None):
         return
     threading.Thread(target=start_cloudflare_tunnel, daemon=True).start()
 
@@ -1111,6 +1123,8 @@ def run_self_test():
 
     ico = desktop_app._resolve_icon_path()
     assert ico is not None and ico.is_file(), f"Missing app_icon.ico (RESOURCE_DIR={RESOURCE_DIR})"
+    assert desktop_app.receiver is sys.modules[__name__], "desktop_app.receiver must alias __main__"
+    assert desktop_app.receiver.WORKER_TOKEN == WORKER_TOKEN, "WORKER_TOKEN mismatch between modules"
 
     ws = start_servers(worker_port=0)
     wport = ws.server_address[1]
@@ -1122,12 +1136,18 @@ def run_self_test():
             raise AssertionError("Expected 401 without token")
         except urllib.error.HTTPError as e:
             assert e.code == 401
+
+        desktop_app.receiver.current_job_config["source_type"] = "gdrive"
+        desktop_app.receiver.current_job_config["gdrive_url"] = "https://drive.google.com/file/d/SELFTEST/view"
+
         req = urllib.request.Request(
             f"http://127.0.0.1:{wport}/api/job_config",
-            headers={"X-Worker-Token": WORKER_TOKEN},
+            headers={"X-Worker-Token": desktop_app.receiver.WORKER_TOKEN},
         )
         with urllib.request.urlopen(req, timeout=3) as r:
             assert r.status == 200
+            payload = json.loads(r.read())
+            assert payload.get("gdrive_url") == "https://drive.google.com/file/d/SELFTEST/view"
 
         app = desktop_app.VastRenderHubApp(worker_server=ws)
         app.withdraw()
